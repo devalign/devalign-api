@@ -1,0 +1,160 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[project]
+name = "devalign-api"
+version = "0.1.0"
+description = "ML-powered API for tech skills gap analysis and learning roadmap generation for Peruvian developers"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Devalign Team" }]
+
+dependencies = [
+    # === Core API ===
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+
+    # === Database ===
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30.0",
+    "alembic>=1.14.0",
+    "pgvector>=0.3.6",
+
+    # === Supabase ===
+    "supabase>=2.0.0,<2.10.0",
+    "email-validator>=2.2.0",
+
+    # === ML & AI ===
+    "scikit-learn>=1.5.0",
+    "numpy>=2.1.0",
+    "pandas>=2.2.0",
+    "kmodes>=0.12.2",
+
+    # === Document Processing ===
+    "pypdf>=5.1.0",
+    "python-docx>=1.1.2",
+    "python-multipart>=0.0.12",
+
+    # === LLM & RAG ===
+    "langchain>=0.3.0",
+    "langchain-community>=0.3.0",
+    "langchain-groq>=0.2.0",
+    "langchain-openai>=0.2.0",
+    "langchain-postgres>=0.0.12",
+
+    # === HTTP Client ===
+    "httpx>=0.27.0",
+    "aiohttp>=3.11.0",
+
+    # === Logging ===
+    "structlog>=24.4.0",
+
+    # === Utilities ===
+    "python-jose[cryptography]>=3.3.0",
+    "tenacity>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "httpx>=0.27.0",          # TestClient
+    "factory-boy>=3.3.1",
+    "faker>=30.0.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+    "pre-commit>=4.0.0",
+    # mypy stubs
+    "types-python-jose>=3.3.4",
+    "sqlalchemy[mypy]>=2.0.36",
+]
+
+# ============================================================
+# TOOL: Ruff (Linter + Formatter)
+# ============================================================
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "SIM", # flake8-simplify
+    "TCH", # flake8-type-checking
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in default arguments (FastAPI dependency pattern)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ============================================================
+# TOOL: mypy (Type Checker)
+# ============================================================
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
+exclude = ["alembic/", "tests/"]
+
+[[tool.mypy.overrides]]
+module = ["kmodes.*", "pgvector.*", "langchain.*", "langchain_groq.*", "langchain_openai.*", "langchain_community.*", "langchain_postgres.*", "structlog.*"]
+ignore_missing_imports = true
+
+# ============================================================
+# TOOL: pytest
+# ============================================================
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = [
+    "--strict-markers",
+    "--cov=src",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "-v",
+]
+markers = [
+    "unit: Unit tests",
+    "integration: Integration tests (require external services)",
+    "slow: Slow tests (ML training, etc.)",
+]
+
+# ============================================================
+# TOOL: Coverage
+# ============================================================
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/migrations/*", "*/alembic/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "@abstractmethod",
+]
