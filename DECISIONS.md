@@ -138,3 +138,43 @@ LinkedIn has strict anti-scraping ToS with legal risk. GetOnBoard has a develope
 Primary: **Koyeb** (free tier, no sleep). Secondary: **Railway** if Koyeb has limitations.
 
 **Status:** To be validated when deploying.
+
+---
+
+## ADR-008: Database Connection Strategy (Supabase)
+
+**Date:** 2026-05-16
+**Status:** Accepted
+
+**Context:**
+Alembic migrations initially failed with `WinError 121` (timeout) and `socket.gaierror` when connecting to the direct Postgres instance (`db.[project-id].supabase.co`). Supabase recently moved direct connections to IPv6-only in some regions, which causes DNS/routing failures on local networks that only support IPv4.
+
+**Decision:**
+Use the **Supabase Connection Pooler** (`aws-0-[region].pooler.supabase.com`) in **Session Mode** (port 5432) as the standard `DATABASE_URL` for both local development (Alembic) and production.
+
+**Consequences:**
+- Guarantees IPv4 compatibility and bypasses local DNS/IPv6 routing issues.
+- Provides connection pooling out-of-the-box, essential if deployed to Serverless environments.
+- Requires appending `?ssl=require` and formatting the username as `postgres.[project-id]`.
+
+---
+
+## ADR-009: Skill Normalization State Management and Pipeline
+
+**Date:** 2026-05-17
+**Status:** Accepted
+
+**Context:**
+The scraping module populates `job_offers` continually with raw skill text. We need a robust mechanism in the ML Engine to process and normalize these skills into `skills` (canonical catalog) and `offer_skills` without redundant execution or data duplication.
+
+**Decision:**
+1. **Control of State:** Add `is_normalized` (Boolean, default False) directly to `job_offers` schema. The pipeline queries only `is_normalized = False` and sets them to `True` after successful mapping.
+2. **Deduplication Strategy:** Combine exact match lookup (fast) with semantic cosine similarity using `all-MiniLM-L6-v2` local embeddings.
+3. **Threshold:** Set similarity threshold to `0.88` to map similar terms (e.g. "react.js" and "react") to a single canonical skill without grouping unrelated skills.
+4. **Endpoint Exposure:** Expose the pipeline as `POST /api/v1/profile/normalize-skills` for programmatic control.
+
+**Consequences:**
+- Optimal computing efficiency (only new job offers are processed).
+- Eliminates manual DB cleanup.
+- Clean canonical catalog containing unique high-quality skills.
+- Low-latency inference after the embedding model is loaded.

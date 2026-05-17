@@ -69,3 +69,26 @@ async def list_clusters(session: SessionDep) -> list[ClusterDTO]:
     """
     use_case = ListClustersUseCase(cluster_repository=...)  # TODO: inject real repo
     return await use_case.execute()
+
+
+@router.post(
+    "/normalize-skills",
+    summary="Normalize raw skills from job offers",
+)
+async def normalize_skills(session: SessionDep) -> dict:
+    """
+    Triggers the Skill Normalization pipeline:
+    1. Fetches unnormalized job offers from the scraper.
+    2. Uses word embeddings to deduplicate and link skills via offer_skills.
+    3. Marks the processed offers as normalized.
+    """
+    from src.ml_engine.application.use_cases import NormalizeSkillsUseCase
+    from src.ml_engine.infrastructure.job_offer_repository import SQLMLJobOfferRepository
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
+
+    use_case = NormalizeSkillsUseCase(
+        job_offer_repo=SQLMLJobOfferRepository(session),
+        skill_repo=SQLSkillRepository(session),
+        embedding_service=get_embedding_service(),
+    )
+    return await use_case.execute()

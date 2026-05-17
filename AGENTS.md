@@ -101,10 +101,10 @@ make check
 
 # Documentation Rules
 
-Always update after significant changes:
-- TASKS.md
-- PROGRESS.md
-- DECISIONS.md
+As an AI agent working on this project, you MUST proactively follow this protocol without being asked:
+- **PROGRESS.md**: Automatically update it AT THE END of any task, feature implementation, or bug fix. Mark tasks as completed before finishing your response.
+- **DECISIONS.md**: Update it WHENEVER an architectural decision is made, a key dependency is added, or a design pattern is defined.
+- **TASKS.md**: Keep it strictly synchronized with pending tasks.
 
 ---
 
