@@ -13,14 +13,14 @@ Integration mode: Shared Database
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from uuid import UUID
 
 
-class JobPlatform(StrEnum):
+class JobPlatform(str, Enum):
     GETONBOARD = "getonboard"
     COMPUTRABAJO = "computrabajo"
 

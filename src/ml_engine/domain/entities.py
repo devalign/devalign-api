@@ -1,11 +1,11 @@
 """ML Engine domain entities."""
 
 from dataclasses import dataclass, field
-from enum import StrEnum
+from enum import Enum
 from uuid import UUID
 
 
-class SeniorityLevel(StrEnum):
+class SeniorityLevel(str, Enum):
     """Developer seniority levels mapped to SFIA 9 responsibility levels."""
 
     JUNIOR = "junior"  # SFIA levels 1-2
@@ -14,7 +14,7 @@ class SeniorityLevel(StrEnum):
     STAFF = "staff"  # SFIA level 6+
 
 
-class SkillType(StrEnum):
+class SkillType(str, Enum):
     HARD_SKILL = "hard_skill"
     SOFT_SKILL = "soft_skill"
     METHODOLOGY = "methodology"
@@ -28,6 +28,7 @@ class Skill:
     name: str
     skill_type: SkillType
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
+    id: UUID | None = None
 
 
 @dataclass(frozen=True)

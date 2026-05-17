@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 if TYPE_CHECKING:
     pass
 
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -66,6 +66,9 @@ class JobOfferModel(Base):
     # JSONB staging: raw skill lists from the scraper (e.g. ["python", "docker"])
     raw_hard_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     raw_soft_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    is_normalized: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
     scraped_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
