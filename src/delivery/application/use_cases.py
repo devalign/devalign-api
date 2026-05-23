@@ -1,13 +1,14 @@
 """Delivery module use cases."""
 
+from datetime import datetime
 from uuid import UUID, uuid4
 
 import structlog
 
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
-from src.delivery.domain.entities import CVDocument
+from src.delivery.domain.entities import CVDocument, User
 from src.delivery.domain.ports import CVRepository, StorageService, UserRepository
-from src.shared.exceptions import FileTooLargeError, NotFoundError, UnsupportedFileTypeError
+from src.shared.exceptions import FileTooLargeError, UnsupportedFileTypeError
 
 logger = structlog.get_logger(__name__)
 
@@ -22,15 +23,33 @@ ALLOWED_CONTENT_TYPES = frozenset(
 
 
 class GetCurrentUserUseCase:
-    """Retrieve profile of the currently authenticated user."""
+    """Retrieve profile of the currently authenticated user.
+
+    If the user does not exist in the local database (e.g., they just registered via Supabase),
+    we implicitly provision them (Just-In-Time) using the provided token identity metadata.
+    """
 
     def __init__(self, user_repository: UserRepository) -> None:
         self._users = user_repository
 
-    async def execute(self, user_id: UUID) -> UserProfileDTO:
+    async def execute(
+        self,
+        user_id: UUID,
+        email: str,
+        full_name: str | None = None,
+        avatar_url: str | None = None,
+    ) -> UserProfileDTO:
         user = await self._users.get_by_id(user_id)
         if user is None:
-            raise NotFoundError(f"User {user_id} not found")
+            logger.info("JIT Provisioning new user", user_id=str(user_id), email=email)
+            user = User(
+                id=user_id,
+                email=email,
+                full_name=full_name,
+                avatar_url=avatar_url,
+                created_at=datetime.utcnow(),
+            )
+            user = await self._users.upsert(user)
 
         return UserProfileDTO(
             id=user.id,
@@ -38,6 +57,7 @@ class GetCurrentUserUseCase:
             full_name=user.full_name,
             avatar_url=user.avatar_url,
         )
+
 
 
 class UploadCVUseCase:
