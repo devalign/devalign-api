@@ -62,6 +62,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local = [
+    # Local embedding model — only needed for development (EMBEDDING_PROVIDER=local).
+    # Pulls in PyTorch + CUDA (~2 GB). Excluded from production Docker builds.
+    "sentence-transformers>=5.5.0",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
