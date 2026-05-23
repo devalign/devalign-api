@@ -51,7 +51,6 @@ dependencies = [
     # === Utilities ===
     "python-jose[cryptography]>=3.3.0",
     "tenacity>=9.0.0",
-    "sentence-transformers>=5.5.0",
 ]
 
 [project.optional-dependencies]
