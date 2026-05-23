@@ -178,3 +178,29 @@ The scraping module populates `job_offers` continually with raw skill text. We n
 - Eliminates manual DB cleanup.
 - Clean canonical catalog containing unique high-quality skills.
 - Low-latency inference after the embedding model is loaded.
+
+---
+
+## ADR-010: Just-In-Time (JIT) User Provisioning for Frontend Authentication
+
+**Date:** 2026-05-17
+**Status:** Accepted
+
+**Context:**
+The frontend utilizes Supabase Auth for managing user login and signup (via email/password or Google OAuth). Once authenticated, the frontend calls the FastAPI backend. However, because user accounts are created inside Supabase's internal `auth.users` schema, they do not automatically exist in our application's local `public.users` table, which is required for relational integrity (such as uploading CVs). We need a simple, lightweight way to synchronize these records.
+
+**Decision:**
+Implement **Just-In-Time (JIT) Provisioning** within the `GET /users/me` endpoint:
+1. Decode the Supabase JWT using the `SUPABASE_ANON_KEY` to extract identity information (user ID, email, name, and avatar URL).
+2. Query the local `public.users` table to see if the user profile exists.
+3. If the user does not exist (meaning it's their first time accessing the API after registration), automatically create and persist their user entity locally *on-the-fly*.
+4. Return the user profile model to the frontend seamlessly.
+
+**Reasoning:**
+This approach avoids complex, brittle database triggers or Webhooks that listen to Supabase Auth events, which are difficult to manage locally and lack deployment portability. It encapsulates the synchronization logic in the application layer, guaranteeing a smooth and decoupled "One-Click" sign-in integration for the frontend.
+
+**Consequences:**
+- The frontend doesn't need to make an explicit "Register Profile" call.
+- Eliminates overhead and latency during signup.
+- Decouples local database constraints from external authentication actions.
+

@@ -74,6 +74,13 @@
 - [ ] GenAI unit tests (mock LLM)
 - [ ] Delivery use case tests
 
+## Phase 7: Frontend Auth Integration ✅
+
+- [x] Extract full JWT payload in FastAPI security layer (`CurrentUserPayloadDep`)
+- [x] JIT User Provisioning implemented in `GetCurrentUserUseCase`
+- [x] Implicitly provision Google / Email profile metadata (name, email, avatar) on `GET /users/me`
+- [x] Fixed pre-existing SQLAlchemy ORM typing bug in `SQLAlchemyUserRepository` (`UserModel.user_id`)
+
 ## Pending (Next Steps)
 
 - [x] Develop ML Pipeline for skill normalization (populate `skills` from `raw_hard_skills`)
@@ -82,3 +89,4 @@
 - [ ] ML Engine unit tests
 - [ ] GenAI unit tests (mock LLM)
 - [ ] Delivery use case tests
+

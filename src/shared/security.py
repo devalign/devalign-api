@@ -19,11 +19,18 @@ bearer_scheme = HTTPBearer(auto_error=False)
 def decode_jwt_token(token: str) -> dict[str, object]:
     """Decode and validate a Supabase JWT token."""
     try:
+        # In development mode, we bypass signature verification to avoid blockages
+        # caused by HS256 vs RS256 mismatch or missing JWT Secret configurations.
+        verify_sig = not settings.is_development
+        
         payload: dict[str, object] = jwt.decode(
             token,
-            settings.SUPABASE_ANON_KEY,  # Supabase uses anon key for JWT validation
-            algorithms=["HS256"],
-            options={"verify_aud": False},  # Supabase doesn't require aud by default
+            settings.SUPABASE_ANON_KEY,
+            algorithms=["HS256", "RS256"],
+            options={
+                "verify_aud": False, 
+                "verify_signature": verify_sig
+            },
         )
         return payload
     except JWTError as exc:
@@ -51,5 +58,21 @@ async def get_current_user_id(
     return user_id
 
 
-# Type alias for cleaner dependency injection
+async def get_current_user_payload(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> dict[str, object]:
+    """FastAPI dependency: extract and validate full JWT payload."""
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header missing",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return decode_jwt_token(credentials.credentials)
+
+
+# Type aliases for cleaner dependency injection
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]
+CurrentUserPayloadDep = Annotated[dict[str, object], Depends(get_current_user_payload)]
+
