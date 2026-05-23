@@ -58,11 +58,12 @@
 
 ## Phase 5: Database (Alembic) ✅
 
-- [x] `alembic.ini` configured
+- [x] `alembic.ini` configured (incl. logging)
 - [x] `alembic/env.py` — async migrations support
-- [ ] Initial migration file (pending: `make migrate-create`)
-- [ ] ML Engine ORM models (clusters, user_profiles)
-- [ ] GenAI ORM models (roadmaps)
+- [x] ORM models for ML Engine (clusters, profiles, skills)
+- [x] ORM models for GenAI (roadmaps)
+- [x] ORM models for Scraper (job_offers, offer_skills)
+- [x] Initial migration applied (`001_create_all_tables.py`) with `pgvector`
 
 ## Phase 6: Tests ✅
 
@@ -73,12 +74,19 @@
 - [ ] GenAI unit tests (mock LLM)
 - [ ] Delivery use case tests
 
+## Phase 7: Frontend Auth Integration ✅
+
+- [x] Extract full JWT payload in FastAPI security layer (`CurrentUserPayloadDep`)
+- [x] JIT User Provisioning implemented in `GetCurrentUserUseCase`
+- [x] Implicitly provision Google / Email profile metadata (name, email, avatar) on `GET /users/me`
+- [x] Fixed pre-existing SQLAlchemy ORM typing bug in `SQLAlchemyUserRepository` (`UserModel.user_id`)
+
 ## Pending (Next Steps)
 
-- [ ] Create `.env` from `.env.example` with real Supabase credentials
-- [ ] Run `make install` to set up virtual environment
-- [ ] Create initial Alembic migration
+- [x] Develop ML Pipeline for skill normalization (populate `skills` from `raw_hard_skills`)
 - [ ] Seed pgvector with SFIA9/SWECOM documents (`scripts/seed_vectors.py`)
-- [ ] ORM models for ML Engine (clusters, profiles, roadmaps)
-- [ ] SQLAlchemy repos for ML Engine and GenAI modules
-- [ ] Integration tests
+- [x] Integration testing with `devalign-scraping` (Supabase DB schema aligned & skills normalized)
+- [ ] ML Engine unit tests
+- [ ] GenAI unit tests (mock LLM)
+- [ ] Delivery use case tests
+

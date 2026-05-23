@@ -20,7 +20,7 @@ class SQLAlchemyUserRepository(UserRepository):
         self._session = session
 
     async def get_by_id(self, user_id: UUID) -> User | None:
-        result = await self._session.execute(select(UserModel).where(UserModel.id == user_id))
+        result = await self._session.execute(select(UserModel).where(UserModel.user_id == user_id))
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
 
@@ -34,7 +34,8 @@ class SQLAlchemyUserRepository(UserRepository):
         if existing:
             await self._session.execute(
                 update(UserModel)
-                .where(UserModel.id == user.id)
+                .where(UserModel.user_id == user.id)
+
                 .values(
                     email=user.email,
                     full_name=user.full_name,

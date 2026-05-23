@@ -10,6 +10,8 @@ from src.ml_engine.domain.entities import (
     ClusterAffinity,
     SeniorityLevel,
     UserProfile,
+    Skill,
+    SkillType,
 )
 from src.ml_engine.domain.ports import (
     ClusterRepository,
@@ -209,3 +211,158 @@ def _estimate_seniority(cv_text: str) -> SeniorityLevel:
     if any(kw in text_lower for kw in mid_keywords):
         return SeniorityLevel.MID
     return SeniorityLevel.JUNIOR
+
+
+def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
+    """Calculate cosine similarity between two vectors."""
+    dot_product = sum(a * b for a, b in zip(v1, v2))
+    norm_v1 = math.sqrt(sum(a * a for a in v1))
+    norm_v2 = math.sqrt(sum(b * b for b in v2))
+    if norm_v1 == 0 or norm_v2 == 0:
+        return 0.0
+    return dot_product / (norm_v1 * norm_v2)
+
+
+class NormalizeSkillsUseCase:
+    """
+    ML Pipeline step: Normalizes raw string skills from job_offers into
+    canonical Skill entities, and links them via offer_skills.
+    
+    Uses Word Embeddings (Cosine Similarity) to deduplicate skills
+    (e.g., "react.js" vs "React" vs "reactjs").
+    """
+
+    def __init__(
+        self,
+        job_offer_repo,
+        skill_repo,
+        embedding_service: EmbeddingService,
+    ) -> None:
+        self._job_offers = job_offer_repo
+        self._skills = skill_repo
+        self._embedder = embedding_service
+        self.SIMILARITY_THRESHOLD = 0.88  # Tunable threshold
+
+    async def execute(self) -> dict:
+        """Run the normalization pipeline for unnormalized job offers."""
+        from src.ml_engine.domain.entities import Skill, SkillType
+
+        logger.info("Starting Skill Normalization Pipeline")
+        
+        # 1. Fetch unnormalized offers
+        offers = await self._job_offers.get_unnormalized_offers(limit=100)
+        if not offers:
+            logger.info("No unnormalized offers found.")
+            return {"processed_offers": 0, "new_skills": 0}
+
+        # 2. Fetch existing skills
+        existing_skills = await self._skills.get_all_skills()
+        skill_map = {s.normalized_name: s for s in existing_skills}
+        
+        # We also need embeddings for existing skills to do semantic matching
+        # In a real production system, you'd cache these embeddings.
+        # For this prototype, we'll embed the names of existing skills on the fly
+        # if the exact match fails.
+        existing_skill_names = [s.name for s in existing_skills]
+        if existing_skill_names:
+            existing_embeddings = await self._embedder.embed_batch(existing_skill_names)
+        else:
+            existing_embeddings = []
+
+        new_skills_to_create = {}
+        offer_skills_to_insert = []
+        processed_offer_ids = []
+
+        for offer in offers:
+            processed_offer_ids.append(offer["id"])
+            
+            raw_skills = offer.get("raw_hard_skills", [])
+            
+            for raw_skill in raw_skills:
+                clean_name = raw_skill.strip()
+                norm_name = clean_name.lower().replace(" ", "").replace(".", "")
+                
+                if not norm_name:
+                    continue
+                    
+                matched_skill = None
+                
+                # 2.1 Exact match
+                if norm_name in skill_map:
+                    matched_skill = skill_map[norm_name]
+                elif norm_name in new_skills_to_create:
+                    matched_skill = new_skills_to_create[norm_name]
+                else:
+                    # 2.2 Semantic match (Cosine similarity)
+                    raw_emb = await self._embedder.embed_text(clean_name)
+                    best_score = 0.0
+                    best_idx = -1
+                    
+                    for i, ext_emb in enumerate(existing_embeddings):
+                        score = _cosine_similarity(raw_emb, ext_emb)
+                        if score > best_score:
+                            best_score = score
+                            best_idx = i
+                            
+                    if best_score >= self.SIMILARITY_THRESHOLD:
+                        matched_skill = existing_skills[best_idx]
+                    else:
+                        # 2.3 Create new skill
+                        matched_skill = Skill(
+                            name=clean_name,
+                            skill_type=SkillType.HARD_SKILL,
+                            normalized_name=norm_name
+                        )
+                        new_skills_to_create[norm_name] = matched_skill
+                        # Update our local memory to match future raw skills in this batch
+                        existing_skills.append(matched_skill)
+                        existing_embeddings.append(raw_emb)
+                        skill_map[norm_name] = matched_skill
+
+                # We don't have the UUID for the newly created skill yet.
+                # We will assign them after bulk inserting new skills.
+                offer_skills_to_insert.append({
+                    "job_offer_id": offer["id"],
+                    "skill_norm_name": matched_skill.normalized_name,
+                    "skill_type": "hard_skill"
+                })
+
+        # 3. Save new skills to database
+        if new_skills_to_create:
+            logger.info(f"Creating {len(new_skills_to_create)} new canonical skills.")
+            saved_skills = await self._skills.save_skills(list(new_skills_to_create.values()))
+            # Update skill_map with the newly generated UUIDs (mocked as returning them)
+            # Since the actual ORM models get their IDs generated via default=uuid4,
+            # we need to make sure save_skills fetches them back.
+            # For simplicity, we just fetch all skills again
+            all_skills = await self._skills.get_all_skills()
+            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, 'id')}
+        else:
+            all_skills = await self._skills.get_all_skills()
+            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, 'id')}
+
+        # 4. Insert offer_skills relations
+        final_offer_skills = []
+        for os in offer_skills_to_insert:
+            skill_id = skill_id_map.get(os["skill_norm_name"])
+            if skill_id:
+                final_offer_skills.append({
+                    "job_offer_id": os["job_offer_id"],
+                    "skill_id": skill_id,
+                    "skill_type": os["skill_type"]
+                })
+
+        if final_offer_skills:
+            logger.info(f"Saving {len(final_offer_skills)} offer_skills relations.")
+            await self._job_offers.save_offer_skills(final_offer_skills)
+
+        # 5. Mark offers as normalized
+        if processed_offer_ids:
+            logger.info(f"Marking {len(processed_offer_ids)} offers as normalized.")
+            await self._job_offers.mark_as_normalized(processed_offer_ids)
+
+        return {
+            "processed_offers": len(processed_offer_ids),
+            "new_skills": len(new_skills_to_create),
+            "offer_skills_linked": len(final_offer_skills)
+        }
