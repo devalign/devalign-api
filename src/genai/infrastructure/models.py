@@ -6,19 +6,16 @@ to avoid premature normalization of the LLM-generated structure.
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TCH003 — required by SQLAlchemy Mapped[] at runtime
-from typing import TYPE_CHECKING
+from datetime import datetime  # noqa: TC003 — required by SQLAlchemy Mapped[] at runtime
+from typing import Any
 from uuid import UUID, uuid4
-
-if TYPE_CHECKING:
-    pass
 
 from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.genai.domain.entities import PhaseComplexity, Roadmap, RoadmapPhase
+from src.genai.domain.entities import LearningResource, PhaseComplexity, Roadmap, RoadmapPhase
 from src.shared.database import Base
 
 
@@ -37,9 +34,7 @@ class RoadmapModel(Base):
 
     __tablename__ = "roadmaps"
 
-    roadmap_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    roadmap_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     diagnostic_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("diagnostics.diagnostic_id", ondelete="CASCADE"),
@@ -47,7 +42,7 @@ class RoadmapModel(Base):
         index=True,
     )
     # Full roadmap content from the LLM — phases, skills, resources, SFIA references
-    roadmap_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    roadmap_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     # "generating" | "completed" | "failed"
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="generating", index=True
@@ -72,12 +67,21 @@ class RoadmapModel(Base):
                 estimated_weeks=p.get("estimated_weeks", 0),
                 sfia_reference=p.get("sfia_reference"),
                 swecom_reference=p.get("swecom_reference"),
+                resources=[
+                    LearningResource(
+                        title=r.get("title", ""),
+                        resource_type=r.get("resource_type", "course"),
+                        url=r.get("url"),
+                        estimated_hours=r.get("estimated_hours"),
+                    )
+                    for r in p.get("resources", [])
+                ],
             )
             for i, p in enumerate(phases_data)
         ]
         return Roadmap(
             id=self.roadmap_id,
-            user_id=self.roadmap_json.get("user_id", ""),  # type: ignore[arg-type]
+            user_id=UUID(self.roadmap_json.get("user_id")) if self.roadmap_json.get("user_id") else uuid4(),
             specialty=self.roadmap_json.get("specialty", ""),
             seniority=self.roadmap_json.get("seniority", ""),
             phases=phases,

@@ -2,7 +2,7 @@
 # Devalign API — Makefile
 # =============================================================
 
-.PHONY: help install dev test lint type-check format check migrate seed
+.PHONY: help install dev test lint type-check format check migrate seed seed-demo
 
 # Default target
 help:
@@ -18,6 +18,7 @@ help:
 	@echo "  make check        Run lint + type-check + tests (full CI)"
 	@echo "  make migrate      Run pending Alembic migrations"
 	@echo "  make seed         Seed pgvector with SFIA9/SWECOM documents"
+	@echo "  make seed-demo    Seed local DB with clusters and key skills"
 	@echo ""
 
 install:
@@ -51,6 +52,9 @@ migrate-create:
 
 seed:
 	uv run python scripts/seed_vectors.py
+
+seed-demo:
+	uv run python scripts/seed_demo_data.py
 
 docker-up:
 	docker compose up --build

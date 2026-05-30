@@ -10,16 +10,13 @@ Architecture notes:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime  # noqa: TC003 — required by SQLAlchemy Mapped[] at runtime
+from typing import Any
 from uuid import UUID, uuid4
-
-from datetime import datetime  # noqa: TCH003 — required by SQLAlchemy Mapped[] at runtime
-
-if TYPE_CHECKING:
-    pass
 
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -40,9 +37,7 @@ class SkillModel(Base):
     __tablename__ = "skills"
     __table_args__ = (UniqueConstraint("name", name="uq_skills_name"),)
 
-    skill_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    skill_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Normalized skill name — lowercase, canonical form (e.g. "react.js", "kubernetes")
     name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     # "hard_skill" | "soft_skill" | "methodology" | "tool"
@@ -70,17 +65,13 @@ class ClusterModel(Base):
 
     __tablename__ = "clusters"
 
-    cluster_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    cluster_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Human-readable cluster name (e.g. "Backend Cloud-Native Java")
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     # pgvector column — centroid of all embeddings in this cluster
     # Dimensioned for all-MiniLM-L6-v2 (384 dims)
-    centroid_vec: Mapped[list[float] | None] = mapped_column(
-        Vector(EMBEDDING_DIM), nullable=True
-    )
+    centroid_vec: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -127,12 +118,8 @@ class ClusterSkillModel(Base):
     importance_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
 
     # Relationships
-    cluster: Mapped[ClusterModel] = relationship(
-        "ClusterModel", back_populates="cluster_skills"
-    )
-    skill: Mapped[SkillModel] = relationship(
-        "SkillModel", back_populates="cluster_skills"
-    )
+    cluster: Mapped[ClusterModel] = relationship("ClusterModel", back_populates="cluster_skills")
+    skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="cluster_skills")
 
 
 class ProfileModel(Base):
@@ -145,9 +132,7 @@ class ProfileModel(Base):
 
     __tablename__ = "profiles"
 
-    profile_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
-    )
+    profile_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     user_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("users.user_id", ondelete="CASCADE"),
@@ -162,9 +147,12 @@ class ProfileModel(Base):
     cv_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     # pgvector embedding of the CV raw text — used for cosine similarity vs cluster centroids
-    cv_embedding: Mapped[list[float] | None] = mapped_column(
-        Vector(EMBEDDING_DIM), nullable=True
-    )
+    cv_embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    work_experience: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    education: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    certifications: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    location: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    availability: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -211,14 +199,15 @@ class DiagnosticModel(Base):
     )
 
     # Relationships
-    profile: Mapped[ProfileModel] = relationship(
-        "ProfileModel", back_populates="diagnostics"
-    )
+    profile: Mapped[ProfileModel] = relationship("ProfileModel", back_populates="diagnostics")
     detected_cluster: Mapped[ClusterModel] = relationship(
         "ClusterModel", back_populates="diagnostics"
     )
     diagnostic_skills: Mapped[list[DiagnosticSkillModel]] = relationship(
-        "DiagnosticSkillModel", back_populates="diagnostic", lazy="select", cascade="all, delete-orphan"
+        "DiagnosticSkillModel",
+        back_populates="diagnostic",
+        lazy="select",
+        cascade="all, delete-orphan",
     )
 
 
@@ -256,6 +245,4 @@ class DiagnosticSkillModel(Base):
     diagnostic: Mapped[DiagnosticModel] = relationship(
         "DiagnosticModel", back_populates="diagnostic_skills"
     )
-    skill: Mapped[SkillModel] = relationship(
-        "SkillModel", back_populates="diagnostic_skills"
-    )
+    skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="diagnostic_skills")
