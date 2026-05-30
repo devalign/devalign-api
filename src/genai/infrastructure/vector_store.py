@@ -1,5 +1,7 @@
 """pgvector implementation of VectorStorePort using LangChain."""
 
+from typing import Any
+
 import structlog
 from langchain_community.vectorstores import PGVector
 from langchain_core.documents import Document
@@ -32,8 +34,8 @@ class PGVectorStore(VectorStorePort):
             if cfg.EMBEDDING_PROVIDER == "openai":
                 from langchain_openai import OpenAIEmbeddings
 
-                embeddings = OpenAIEmbeddings(
-                    api_key=cfg.OPENAI_API_KEY,  # type: ignore[arg-type]
+                embeddings: Any = OpenAIEmbeddings(
+                    openai_api_key=cfg.OPENAI_API_KEY,
                     model=cfg.EMBEDDING_MODEL,
                 )
             else:

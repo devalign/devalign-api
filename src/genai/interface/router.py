@@ -6,6 +6,7 @@ from src.dependencies import SessionDep
 from src.genai.application.dtos import RoadmapDTO, RoadmapRequestDTO
 from src.genai.application.use_cases import GenerateRoadmapUseCase
 from src.genai.infrastructure.langchain_chain import get_llm_service
+from src.genai.infrastructure.roadmap_repository import SQLRoadmapRepository
 from src.genai.infrastructure.vector_store import PGVectorStore
 from src.shared.security import CurrentUserIdDep
 
@@ -37,6 +38,6 @@ async def generate_roadmap(
     use_case = GenerateRoadmapUseCase(
         llm_service=get_llm_service(),
         vector_store=PGVectorStore(),
-        roadmap_repository=...,  # TODO: inject real repo
+        roadmap_repository=SQLRoadmapRepository(session),
     )
     return await use_case.execute(request)

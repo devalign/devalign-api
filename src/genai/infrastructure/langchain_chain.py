@@ -29,8 +29,8 @@ class GroqLLMService(LLMService):
             from langchain_groq import ChatGroq
 
             llm = ChatGroq(
-                api_key=self._api_key,  # type: ignore[arg-type]
-                model=self._model,
+                api_key=self._api_key,
+                model_name=self._model,
                 temperature=0.3,  # Low temperature for structured output
                 max_tokens=4096,
             )
@@ -69,7 +69,7 @@ class OpenAILLMService(LLMService):
             from langchain_openai import ChatOpenAI
 
             llm = ChatOpenAI(
-                api_key=self._api_key,  # type: ignore[arg-type]
+                api_key=self._api_key,
                 model=self._model,
                 temperature=0.3,
             )

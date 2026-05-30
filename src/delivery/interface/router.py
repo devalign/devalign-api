@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, UploadFile
 
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
 from src.delivery.application.use_cases import (
@@ -66,13 +66,13 @@ async def get_me(
     )
 
 
-
 @router.post(
     "/me/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document"
 )
 async def upload_cv(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="CV document (PDF or DOCX, max 5MB)"),
 ) -> CVUploadResultDTO:
     """
@@ -84,12 +84,64 @@ async def upload_cv(
     """
     content = await file.read()
     use_case = _get_upload_cv_use_case(session)
-    return await use_case.execute(
+    result = await use_case.execute(
         user_id=UUID(current_user_id),
         filename=file.filename or "cv",
         content=content,
         content_type=file.content_type or "application/octet-stream",
     )
+
+    # Queue background task to run profile analysis
+    background_tasks.add_task(
+        run_profile_analysis_task,
+        user_id=result.user_id,
+        cv_id=result.cv_id,
+        content=content,
+        content_type=file.content_type or "application/octet-stream",
+    )
+
+    return result
+
+
+async def run_profile_analysis_task(
+    user_id: UUID,
+    cv_id: UUID,
+    content: bytes,
+    content_type: str,
+) -> None:
+    import structlog
+
+    from src.genai.infrastructure.langchain_chain import get_llm_service
+    from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+    from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
+    from src.ml_engine.infrastructure.embeddings import get_embedding_service
+    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
+    from src.shared.database import AsyncSessionLocal
+
+    bg_logger = structlog.get_logger("background_tasks")
+    bg_logger.info("Starting background CV analysis", user_id=str(user_id), cv_id=str(cv_id))
+
+    try:
+        async with AsyncSessionLocal() as session:
+            use_case = ProfileUserFromCVUseCase(
+                cv_parser=LocalCVParserService(),
+                embedding_service=get_embedding_service(),
+                cluster_repository=SQLClusterRepository(session),
+                profile_repository=SQLUserProfileRepository(session),
+                llm_service=get_llm_service(),
+            )
+            await use_case.execute(
+                user_id=user_id,
+                cv_id=cv_id,
+                cv_content=content,
+                content_type=content_type,
+            )
+            # Session context manager commits on success or rolls back on exception
+            await session.commit()
+            bg_logger.info("Background CV analysis completed successfully", user_id=str(user_id))
+    except Exception as exc:
+        bg_logger.exception("Background CV analysis failed", user_id=str(user_id), error=str(exc))
 
 
 @router.get("/me/cvs", response_model=CVListDTO, summary="List uploaded CVs")

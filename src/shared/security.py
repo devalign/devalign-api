@@ -22,15 +22,12 @@ def decode_jwt_token(token: str) -> dict[str, object]:
         # In development mode, we bypass signature verification to avoid blockages
         # caused by HS256 vs RS256 mismatch or missing JWT Secret configurations.
         verify_sig = not settings.is_development
-        
+
         payload: dict[str, object] = jwt.decode(
             token,
             settings.SUPABASE_ANON_KEY,
             algorithms=["HS256", "RS256"],
-            options={
-                "verify_aud": False, 
-                "verify_signature": verify_sig
-            },
+            options={"verify_aud": False, "verify_signature": verify_sig},
         )
         return payload
     except JWTError as exc:
@@ -75,4 +72,3 @@ async def get_current_user_payload(
 # Type aliases for cleaner dependency injection
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]
 CurrentUserPayloadDep = Annotated[dict[str, object], Depends(get_current_user_payload)]
-

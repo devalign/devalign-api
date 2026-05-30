@@ -1,11 +1,11 @@
 """GenAI module domain entities."""
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from uuid import UUID
 
 
-class PhaseComplexity(str, Enum):
+class PhaseComplexity(StrEnum):
     FOUNDATIONAL = "foundational"
     INTERMEDIATE = "intermediate"
     ADVANCED = "advanced"
