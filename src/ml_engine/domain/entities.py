@@ -1,11 +1,12 @@
 """ML Engine domain entities."""
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
 
-class SeniorityLevel(str, Enum):
+class SeniorityLevel(StrEnum):
     """Developer seniority levels mapped to SFIA 9 responsibility levels."""
 
     JUNIOR = "junior"  # SFIA levels 1-2
@@ -14,7 +15,7 @@ class SeniorityLevel(str, Enum):
     STAFF = "staff"  # SFIA level 6+
 
 
-class SkillType(str, Enum):
+class SkillType(StrEnum):
     HARD_SKILL = "hard_skill"
     SOFT_SKILL = "soft_skill"
     METHODOLOGY = "methodology"
@@ -74,6 +75,15 @@ class UserProfile:
     primary_affinity: ClusterAffinity
     secondary_affinities: list[ClusterAffinity] = field(default_factory=list)
     skill_gaps: list[SkillGap] = field(default_factory=list)
+    full_name: str | None = None
+    current_job_role: str | None = None
+    years_experience: int | None = None
+    preferred_modality: str | None = None
+    location: str | None = None
+    availability: str | None = None
+    work_experience: list[dict[str, Any]] = field(default_factory=list)
+    education: list[dict[str, Any]] = field(default_factory=list)
+    certifications: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def primary_specialty(self) -> str:

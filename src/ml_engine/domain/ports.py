@@ -1,6 +1,7 @@
 """ML Engine domain ports (interfaces)."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 from uuid import UUID
 
 from src.ml_engine.domain.entities import Skill, TechCluster, UserProfile
@@ -75,7 +76,7 @@ class MLJobOfferRepository(ABC):
     """Port for accessing job offers from the ML Engine context."""
 
     @abstractmethod
-    async def get_unnormalized_offers(self, limit: int = 100) -> list[dict]:
+    async def get_unnormalized_offers(self, limit: int = 100) -> list[dict[str, Any]]:
         """Retrieve job offers that have not yet been normalized.
         Returns dictionaries or raw data rather than domain entities, since the ML
         engine only needs id and raw_skills.
@@ -83,7 +84,7 @@ class MLJobOfferRepository(ABC):
         ...
 
     @abstractmethod
-    async def save_offer_skills(self, offer_skills: list[dict]) -> None:
+    async def save_offer_skills(self, offer_skills: list[dict[str, Any]]) -> None:
         """Bulk save offer_skills relations."""
         ...
 

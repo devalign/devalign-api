@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of MLJobOfferRepository."""
 
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import select, update
@@ -15,16 +16,12 @@ class SQLMLJobOfferRepository(MLJobOfferRepository):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get_unnormalized_offers(self, limit: int = 100) -> list[dict]:
+    async def get_unnormalized_offers(self, limit: int = 100) -> list[dict[str, Any]]:
         """Retrieve job offers that have not yet been normalized."""
-        stmt = (
-            select(JobOfferModel)
-            .where(JobOfferModel.is_normalized == False)
-            .limit(limit)
-        )
+        stmt = select(JobOfferModel).where(JobOfferModel.is_normalized.is_(False)).limit(limit)
         result = await self._session.execute(stmt)
         models = result.scalars().all()
-        
+
         return [
             {
                 "id": m.job_offer_id,
@@ -34,7 +31,7 @@ class SQLMLJobOfferRepository(MLJobOfferRepository):
             for m in models
         ]
 
-    async def save_offer_skills(self, offer_skills: list[dict]) -> None:
+    async def save_offer_skills(self, offer_skills: list[dict[str, Any]]) -> None:
         """Bulk save offer_skills relations."""
         if not offer_skills:
             return
@@ -54,7 +51,7 @@ class SQLMLJobOfferRepository(MLJobOfferRepository):
         """Mark job offers as normalized."""
         if not job_offer_ids:
             return
-            
+
         stmt = (
             update(JobOfferModel)
             .where(JobOfferModel.job_offer_id.in_(job_offer_ids))

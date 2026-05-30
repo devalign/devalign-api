@@ -7,6 +7,8 @@ Strategy:
 Both implement EmbeddingService port — swappable via config.
 """
 
+from typing import Any, cast
+
 import structlog
 
 from src.config import settings
@@ -23,7 +25,7 @@ class LocalEmbeddingService(EmbeddingService):
         self._model_name = model_name
         self._model = None  # Lazy load to avoid startup delay
 
-    def _get_model(self) -> object:
+    def _get_model(self) -> Any:
         """Lazy-load the sentence-transformers model."""
         if self._model is None:
             try:
@@ -46,9 +48,9 @@ class LocalEmbeddingService(EmbeddingService):
         loop = asyncio.get_event_loop()
         embedding = await loop.run_in_executor(
             None,
-            lambda: model.encode(text, convert_to_numpy=True).tolist(),  # type: ignore[union-attr]
+            lambda: model.encode(text, convert_to_numpy=True).tolist(),
         )
-        return embedding  # type: ignore[return-value]
+        return cast("list[float]", embedding)
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for a batch of texts."""
@@ -58,9 +60,9 @@ class LocalEmbeddingService(EmbeddingService):
         loop = asyncio.get_event_loop()
         embeddings = await loop.run_in_executor(
             None,
-            lambda: model.encode(texts, convert_to_numpy=True).tolist(),  # type: ignore[union-attr]
+            lambda: model.encode(texts, convert_to_numpy=True).tolist(),
         )
-        return embeddings  # type: ignore[return-value]
+        return cast("list[list[float]]", embeddings)
 
 
 class OpenAIEmbeddingService(EmbeddingService):

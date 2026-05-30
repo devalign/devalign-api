@@ -1,5 +1,6 @@
 """ML Engine application DTOs."""
 
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -37,6 +38,15 @@ class UserProfileDTO(BaseModel):
     secondary_affinities: list[ClusterAffinityDTO] = []
     detected_skills: list[SkillDTO] = []
     skill_gaps: list[SkillDTO] = []
+    full_name: str | None = None
+    current_job_role: str | None = None
+    years_experience: int | None = None
+    preferred_modality: str | None = None
+    location: str | None = None
+    availability: str | None = None
+    work_experience: list[dict[str, Any]] = []
+    education: list[dict[str, Any]] = []
+    certifications: list[dict[str, Any]] = []
     message: str = "Profile generated successfully"
 
 
@@ -48,3 +58,19 @@ class ClusterDTO(BaseModel):
     description: str
     top_skills: list[str]
     job_offer_count: int
+
+
+class ProfileUpdateDTO(BaseModel):
+    full_name: str | None = None
+    current_job_role: str | None = None
+    years_experience: int | None = None
+    preferred_modality: str | None = None
+    location: str | None = None
+    availability: str | None = None
+    work_experience: list[dict[str, Any]] | None = None
+    education: list[dict[str, Any]] | None = None
+    certifications: list[dict[str, Any]] | None = None
+
+
+class SkillsUpdateDTO(BaseModel):
+    skills: list[SkillDTO]
