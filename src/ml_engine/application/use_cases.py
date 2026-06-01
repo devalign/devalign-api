@@ -1,22 +1,28 @@
 """ML Engine use cases."""
 
+import json
 import math
+from typing import Any
 from uuid import UUID
 
 import structlog
 
+from src.genai.domain.ports import LLMService
 from src.ml_engine.application.dtos import ClusterAffinityDTO, ClusterDTO, SkillDTO, UserProfileDTO
 from src.ml_engine.domain.entities import (
     ClusterAffinity,
     SeniorityLevel,
-    UserProfile,
     Skill,
+    SkillGap,
     SkillType,
+    UserProfile,
 )
 from src.ml_engine.domain.ports import (
     ClusterRepository,
     CVParserService,
     EmbeddingService,
+    MLJobOfferRepository,
+    SkillRepository,
     UserProfileRepository,
 )
 from src.shared.exceptions import MLPipelineError
@@ -30,11 +36,12 @@ class ProfileUserFromCVUseCase:
 
     Steps:
     1. Extract text from CV (PDF/DOCX)
-    2. Generate embedding vector
-    3. Compute cosine similarity against all cluster centroids
-    4. Detect skill gaps vs target cluster
-    5. Estimate seniority (heuristic on skill count + cluster)
-    6. Persist and return profile
+    2. Run LLM structured extraction (experience, skills, certifications, education, personal info)
+    3. Generate embedding vector
+    4. Compute cosine similarity against all cluster centroids
+    5. Detect skill gaps vs target cluster
+    6. Estimate seniority
+    7. Persist and return profile
     """
 
     def __init__(
@@ -43,11 +50,13 @@ class ProfileUserFromCVUseCase:
         embedding_service: EmbeddingService,
         cluster_repository: ClusterRepository,
         profile_repository: UserProfileRepository,
+        llm_service: LLMService,
     ) -> None:
         self._cv_parser = cv_parser
         self._embedder = embedding_service
         self._clusters = cluster_repository
         self._profiles = profile_repository
+        self._llm = llm_service
 
     async def execute(
         self,
@@ -64,16 +73,22 @@ class ProfileUserFromCVUseCase:
             if not cv_text.strip():
                 raise MLPipelineError("CV text extraction returned empty content")
 
-            # Step 2: Embed CV text
+            # Step 2: Run LLM structured extraction
+            logger.info("Extracting structured info using LLM")
+            prompt = _build_cv_extraction_prompt(cv_text)
+            raw_llm_output = await self._llm.generate(prompt=prompt, context=[])
+            extracted_data = _parse_cv_extraction_output(raw_llm_output)
+
+            # Step 3: Embed CV text
             logger.info("Generating CV embedding")
             cv_embedding = await self._embedder.embed_text(cv_text)
 
-            # Step 3: Load clusters and compute similarities
+            # Step 4: Load clusters and compute similarities
             clusters = await self._clusters.get_all_active()
             if not clusters:
                 raise MLPipelineError("No tech clusters available — run clustering first")
 
-            # Step 4: Compute cosine similarity per cluster
+            # Step 5: Compute cosine similarity per cluster
             affinities = []
             for cluster in clusters:
                 if not cluster.centroid_skills:
@@ -104,20 +119,41 @@ class ProfileUserFromCVUseCase:
             )
             secondaries = affinities[1:3]  # Top 2 secondary affinities
 
-            # Step 5: Seniority heuristic (placeholder — will improve with real data)
-            seniority = _estimate_seniority(cv_text)
+            # Step 6: Seniority estimation
+            years_exp = extracted_data.get("years_experience")
+            if isinstance(years_exp, (int, float)):
+                if years_exp >= 6:
+                    seniority = SeniorityLevel.SENIOR
+                elif years_exp >= 3:
+                    seniority = SeniorityLevel.MID
+                else:
+                    seniority = SeniorityLevel.JUNIOR
+            else:
+                seniority = _estimate_seniority(cv_text)
 
-            # Step 6: Gap detection (simplified — full impl in next phase)
+            # Step 7: Parse skills and detect gaps
+            detected_skills = []
+            extracted_skills = extracted_data.get("skills", [])
+            for name in extracted_skills:
+                if not name.strip():
+                    continue
+                detected_skills.append(
+                    Skill(
+                        name=name.strip(),
+                        skill_type=SkillType.HARD_SKILL,
+                        normalized_name=name.lower().strip().replace(" ", "").replace(".", ""),
+                    )
+                )
+
             primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
             skill_gaps = []
+            detected_skill_norms = {s.normalized_name for s in detected_skills}
             if primary_cluster:
-                detected_skill_names = {word.lower() for word in cv_text.split()}
                 for skill in primary_cluster.centroid_skills:
-                    if skill.normalized_name not in detected_skill_names:
+                    if skill.normalized_name not in detected_skill_norms:
                         skill_gaps.append(
-                            SkillDTO(
-                                name=skill.name,
-                                skill_type=skill.skill_type.value,
+                            SkillGap(
+                                skill=skill,
                                 market_importance="high",
                             )
                         )
@@ -127,16 +163,25 @@ class ProfileUserFromCVUseCase:
                 user_id=user_id,
                 cv_id=cv_id,
                 embedding=cv_embedding,
-                detected_skills=[],  # Full NER extraction in future phase
+                detected_skills=detected_skills,
                 seniority=seniority,
                 primary_affinity=primary,
                 secondary_affinities=secondaries,
-                skill_gaps=[],
+                skill_gaps=skill_gaps,
+                full_name=extracted_data.get("full_name") or None,
+                current_job_role=extracted_data.get("current_job_role") or None,
+                years_experience=int(years_exp) if isinstance(years_exp, (int, float)) else None,
+                preferred_modality=extracted_data.get("preferred_modality") or None,
+                location=extracted_data.get("location") or None,
+                availability=extracted_data.get("availability") or None,
+                work_experience=extracted_data.get("work_experience") or [],
+                education=extracted_data.get("education") or [],
+                certifications=extracted_data.get("certifications") or [],
             )
             await self._profiles.save(profile)
 
             logger.info(
-                "Profile generated",
+                "Profile generated and saved",
                 user_id=str(user_id),
                 specialty=primary.cluster_name,
                 score=primary.affinity_score,
@@ -157,7 +202,27 @@ class ProfileUserFromCVUseCase:
                     )
                     for a in secondaries
                 ],
-                skill_gaps=skill_gaps[:10],  # Return top 10 gaps
+                detected_skills=[
+                    SkillDTO(name=s.name, skill_type=s.skill_type.value) for s in detected_skills
+                ],
+                skill_gaps=[
+                    SkillDTO(
+                        name=g.skill.name,
+                        skill_type=g.skill.skill_type.value,
+                        market_importance=g.market_importance,
+                    )
+                    for g in skill_gaps
+                ],
+                full_name=profile.full_name,
+                current_job_role=profile.current_job_role,
+                years_experience=profile.years_experience,
+                preferred_modality=profile.preferred_modality,
+                location=profile.location,
+                availability=profile.availability,
+                work_experience=profile.work_experience,
+                education=profile.education,
+                certifications=profile.certifications,
+                message="Profile generated successfully",
             )
 
         except MLPipelineError:
@@ -190,6 +255,79 @@ class ListClustersUseCase:
 # === Helpers ===
 
 
+def _build_cv_extraction_prompt(cv_text: str) -> str:
+    """Build structured prompt for LLM CV extraction."""
+    return f"""You are a professional CV analyzer.
+Extract the following details from the CV text in a structured JSON format:
+1. Full Name (full_name)
+2. Current Job Role (current_job_role)
+3. Years of experience (years_experience, integer)
+4. Preferred modality (preferred_modality: 'Remota', 'Híbrida', 'Presencial', 'Remota / Híbrida' etc)
+5. Location (location: 'City, Country')
+6. Availability (availability: e.g. 'Inmediata', '1 mes', etc)
+7. Work experience (work_experience: list of objects with company, role, description, start_date, end_date, current (bool))
+8. Education (education: list of objects with institution, degree, start_date, end_date)
+9. Certifications (certifications: list of objects with name, issuer, date)
+10. Technical & Soft Skills (skills: list of skill names)
+
+CV Text:
+{cv_text}
+
+Respond ONLY with a valid JSON object matching this schema:
+{{
+  "full_name": "string or null",
+  "current_job_role": "string or null",
+  "years_experience": integer or null,
+  "preferred_modality": "string or null",
+  "location": "string or null",
+  "availability": "string or null",
+  "work_experience": [
+    {{
+      "company": "string",
+      "role": "string",
+      "description": "string",
+      "start_date": "string",
+      "end_date": "string or null",
+      "current": boolean
+    }}
+  ],
+  "education": [
+    {{
+      "institution": "string",
+      "degree": "string",
+      "start_date": "string",
+      "end_date": "string or null"
+    }}
+  ],
+  "certifications": [
+    {{
+      "name": "string",
+      "issuer": "string or null",
+      "date": "string or null"
+    }}
+  ],
+  "skills": ["string"]
+}}"""
+
+
+def _parse_cv_extraction_output(raw_output: str) -> dict[str, Any]:
+    """Parse JSON block from LLM output."""
+    try:
+        start = raw_output.find("{")
+        end = raw_output.rfind("}") + 1
+        if start == -1 or end == 0:
+            raise ValueError("No JSON object found in LLM output")
+        parsed = json.loads(raw_output[start:end])
+        if not isinstance(parsed, dict):
+            raise ValueError("Parsed output is not a dictionary")
+        return parsed
+    except Exception as exc:
+        logger.warning(
+            "Failed to parse LLM CV extraction, fallback to empty defaults", error=str(exc)
+        )
+        return {}
+
+
 def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
     """Compute cosine similarity between two vectors."""
     dot = sum(a * b for a, b in zip(v1, v2, strict=True))
@@ -213,29 +351,19 @@ def _estimate_seniority(cv_text: str) -> SeniorityLevel:
     return SeniorityLevel.JUNIOR
 
 
-def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
-    """Calculate cosine similarity between two vectors."""
-    dot_product = sum(a * b for a, b in zip(v1, v2))
-    norm_v1 = math.sqrt(sum(a * a for a in v1))
-    norm_v2 = math.sqrt(sum(b * b for b in v2))
-    if norm_v1 == 0 or norm_v2 == 0:
-        return 0.0
-    return dot_product / (norm_v1 * norm_v2)
-
-
 class NormalizeSkillsUseCase:
     """
     ML Pipeline step: Normalizes raw string skills from job_offers into
     canonical Skill entities, and links them via offer_skills.
-    
+
     Uses Word Embeddings (Cosine Similarity) to deduplicate skills
     (e.g., "react.js" vs "React" vs "reactjs").
     """
 
     def __init__(
         self,
-        job_offer_repo,
-        skill_repo,
+        job_offer_repo: MLJobOfferRepository,
+        skill_repo: SkillRepository,
         embedding_service: EmbeddingService,
     ) -> None:
         self._job_offers = job_offer_repo
@@ -243,12 +371,12 @@ class NormalizeSkillsUseCase:
         self._embedder = embedding_service
         self.SIMILARITY_THRESHOLD = 0.88  # Tunable threshold
 
-    async def execute(self) -> dict:
+    async def execute(self) -> dict[str, Any]:
         """Run the normalization pipeline for unnormalized job offers."""
         from src.ml_engine.domain.entities import Skill, SkillType
 
         logger.info("Starting Skill Normalization Pipeline")
-        
+
         # 1. Fetch unnormalized offers
         offers = await self._job_offers.get_unnormalized_offers(limit=100)
         if not offers:
@@ -258,7 +386,7 @@ class NormalizeSkillsUseCase:
         # 2. Fetch existing skills
         existing_skills = await self._skills.get_all_skills()
         skill_map = {s.normalized_name: s for s in existing_skills}
-        
+
         # We also need embeddings for existing skills to do semantic matching
         # In a real production system, you'd cache these embeddings.
         # For this prototype, we'll embed the names of existing skills on the fly
@@ -269,24 +397,24 @@ class NormalizeSkillsUseCase:
         else:
             existing_embeddings = []
 
-        new_skills_to_create = {}
+        new_skills_to_create: dict[str, Skill] = {}
         offer_skills_to_insert = []
         processed_offer_ids = []
 
         for offer in offers:
             processed_offer_ids.append(offer["id"])
-            
+
             raw_skills = offer.get("raw_hard_skills", [])
-            
+
             for raw_skill in raw_skills:
                 clean_name = raw_skill.strip()
                 norm_name = clean_name.lower().replace(" ", "").replace(".", "")
-                
+
                 if not norm_name:
                     continue
-                    
+
                 matched_skill = None
-                
+
                 # 2.1 Exact match
                 if norm_name in skill_map:
                     matched_skill = skill_map[norm_name]
@@ -297,13 +425,13 @@ class NormalizeSkillsUseCase:
                     raw_emb = await self._embedder.embed_text(clean_name)
                     best_score = 0.0
                     best_idx = -1
-                    
+
                     for i, ext_emb in enumerate(existing_embeddings):
                         score = _cosine_similarity(raw_emb, ext_emb)
                         if score > best_score:
                             best_score = score
                             best_idx = i
-                            
+
                     if best_score >= self.SIMILARITY_THRESHOLD:
                         matched_skill = existing_skills[best_idx]
                     else:
@@ -311,7 +439,7 @@ class NormalizeSkillsUseCase:
                         matched_skill = Skill(
                             name=clean_name,
                             skill_type=SkillType.HARD_SKILL,
-                            normalized_name=norm_name
+                            normalized_name=norm_name,
                         )
                         new_skills_to_create[norm_name] = matched_skill
                         # Update our local memory to match future raw skills in this batch
@@ -321,36 +449,40 @@ class NormalizeSkillsUseCase:
 
                 # We don't have the UUID for the newly created skill yet.
                 # We will assign them after bulk inserting new skills.
-                offer_skills_to_insert.append({
-                    "job_offer_id": offer["id"],
-                    "skill_norm_name": matched_skill.normalized_name,
-                    "skill_type": "hard_skill"
-                })
+                offer_skills_to_insert.append(
+                    {
+                        "job_offer_id": offer["id"],
+                        "skill_norm_name": matched_skill.normalized_name,
+                        "skill_type": "hard_skill",
+                    }
+                )
 
         # 3. Save new skills to database
         if new_skills_to_create:
             logger.info(f"Creating {len(new_skills_to_create)} new canonical skills.")
-            saved_skills = await self._skills.save_skills(list(new_skills_to_create.values()))
+            await self._skills.save_skills(list(new_skills_to_create.values()))
             # Update skill_map with the newly generated UUIDs (mocked as returning them)
             # Since the actual ORM models get their IDs generated via default=uuid4,
             # we need to make sure save_skills fetches them back.
             # For simplicity, we just fetch all skills again
             all_skills = await self._skills.get_all_skills()
-            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, 'id')}
+            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, "id")}
         else:
             all_skills = await self._skills.get_all_skills()
-            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, 'id')}
+            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, "id")}
 
         # 4. Insert offer_skills relations
         final_offer_skills = []
         for os in offer_skills_to_insert:
             skill_id = skill_id_map.get(os["skill_norm_name"])
             if skill_id:
-                final_offer_skills.append({
-                    "job_offer_id": os["job_offer_id"],
-                    "skill_id": skill_id,
-                    "skill_type": os["skill_type"]
-                })
+                final_offer_skills.append(
+                    {
+                        "job_offer_id": os["job_offer_id"],
+                        "skill_id": skill_id,
+                        "skill_type": os["skill_type"],
+                    }
+                )
 
         if final_offer_skills:
             logger.info(f"Saving {len(final_offer_skills)} offer_skills relations.")
@@ -364,5 +496,5 @@ class NormalizeSkillsUseCase:
         return {
             "processed_offers": len(processed_offer_ids),
             "new_skills": len(new_skills_to_create),
-            "offer_skills_linked": len(final_offer_skills)
+            "offer_skills_linked": len(final_offer_skills),
         }

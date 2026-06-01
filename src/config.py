@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # === CORS ===
-    CORS_ORIGINS: list[str] = Field(default=["http://localhost:3000"])
+    CORS_ORIGINS: str | list[str] = Field(default=["http://localhost:3000"])
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -52,9 +52,10 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "llama-3.1-70b-versatile"
     GROQ_API_KEY: str = Field(default="", description="Groq API key")
     OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
+    HF_API_KEY: str = Field(default="", description="Hugging Face API token/key")
 
     # === Embeddings Configuration ===
-    EMBEDDING_PROVIDER: Literal["local", "openai"] = "local"
+    EMBEDDING_PROVIDER: Literal["local", "openai", "groq", "huggingface"] = "local"
     EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
 
     # === Security ===

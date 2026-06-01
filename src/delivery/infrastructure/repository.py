@@ -35,7 +35,6 @@ class SQLAlchemyUserRepository(UserRepository):
             await self._session.execute(
                 update(UserModel)
                 .where(UserModel.user_id == user.id)
-
                 .values(
                     email=user.email,
                     full_name=user.full_name,

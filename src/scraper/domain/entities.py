@@ -13,14 +13,14 @@ Integration mode: Shared Database
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from uuid import UUID
 
 
-class JobPlatform(str, Enum):
+class JobPlatform(StrEnum):
     GETONBOARD = "getonboard"
     COMPUTRABAJO = "computrabajo"
 
@@ -43,22 +43,22 @@ class JobOffer:
     platform: JobPlatform = JobPlatform.COMPUTRABAJO
 
     # Core fields — match job_offers columns exactly
-    title: str = ""              # → job_title
+    title: str = ""  # → job_title
     company: str = ""
     location: str = ""
-    salary: str = ""             # varchar(100) — raw text from scraper
-    modality: str = ""           # "Remoto" | "Híbrido" | "Presencial"
-    experience_years: str = ""   # varchar(100) — raw text from scraper
+    salary: str = ""  # varchar(100) — raw text from scraper
+    modality: str = ""  # "Remoto" | "Híbrido" | "Presencial"
+    experience_years: str = ""  # varchar(100) — raw text from scraper
     education_level: str = ""
-    raw_description: str = ""    # → full_description
+    raw_description: str = ""  # → full_description
     source_url: str = ""
-    date_posted: str = ""        # "Hace 2 días" | "2026-04-30"
+    date_posted: str = ""  # "Hace 2 días" | "2026-04-30"
     scraped_at: str = ""
 
     # Staging skill arrays — stored as JSONB in job_offers
     # ML Engine normalizes these into the skills + offer_skills tables
-    hard_skills: list[str] = field(default_factory=list)   # → raw_hard_skills
-    soft_skills: list[str] = field(default_factory=list)   # → raw_soft_skills
+    hard_skills: list[str] = field(default_factory=list)  # → raw_hard_skills
+    soft_skills: list[str] = field(default_factory=list)  # → raw_soft_skills
 
     @property
     def portal(self) -> str:

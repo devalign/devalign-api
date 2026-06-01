@@ -1,20 +1,18 @@
 """Unit tests for custom exception hierarchy."""
 
-import pytest
 from http import HTTPStatus
+
+import pytest
 
 from src.shared.exceptions import (
     AuthenticationError,
     AuthorizationError,
-    ConflictError,
     DevalignException,
     ExternalServiceError,
     FileTooLargeError,
     MLPipelineError,
     NotFoundError,
     RAGPipelineError,
-    UnsupportedFileTypeError,
-    ValidationError,
 )
 
 

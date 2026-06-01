@@ -7,12 +7,8 @@ The ml_engine normalizes raw_hard_skills/raw_soft_skills into offer_skills.
 
 from __future__ import annotations
 
-from datetime import datetime  # noqa: TCH003 — required by SQLAlchemy Mapped[] at runtime
-from typing import TYPE_CHECKING
+from datetime import datetime  # noqa: TC003 — required by SQLAlchemy Mapped[] at runtime
 from uuid import UUID, uuid4
-
-if TYPE_CHECKING:
-    pass
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -64,8 +60,8 @@ class JobOfferModel(Base):
     portal: Mapped[str | None] = mapped_column(String(100), nullable=True)
     date_posted: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # JSONB staging: raw skill lists from the scraper (e.g. ["python", "docker"])
-    raw_hard_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    raw_soft_skills: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    raw_hard_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    raw_soft_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     is_normalized: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false", index=True
     )
@@ -126,6 +122,4 @@ class OfferSkillModel(Base):
     importance_score: Mapped[float | None] = mapped_column(Numeric(5, 2), nullable=True)
 
     # Relationships
-    job_offer: Mapped[JobOfferModel] = relationship(
-        "JobOfferModel", back_populates="offer_skills"
-    )
+    job_offer: Mapped[JobOfferModel] = relationship("JobOfferModel", back_populates="offer_skills")

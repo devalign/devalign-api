@@ -1,5 +1,8 @@
 """Supabase Storage adapter for CV uploads."""
 
+import contextlib
+import re
+import unicodedata
 import uuid
 from uuid import UUID
 
@@ -12,6 +15,18 @@ from src.shared.exceptions import ExternalServiceError
 logger = structlog.get_logger(__name__)
 
 CV_BUCKET = "cvs"
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Normalize unicode characters and replace non-alphanumeric with underscores to prevent InvalidKey in cloud storage."""
+    # Decompose unicode characters (accents, bullet points, etc.)
+    normalized = unicodedata.normalize("NFKD", filename)
+    # Convert to ASCII, ignoring non-ASCII characters like bullet points
+    ascii_encoded = normalized.encode("ascii", "ignore").decode("ascii")
+    # Replace non-alphanumeric (except dot, underscore, hyphen) with underscores
+    safe_name = re.sub(r"[^a-zA-Z0-9._-]", "_", ascii_encoded)
+    # Remove consecutive underscores
+    return re.sub(r"_+", "_", safe_name)
 
 
 class SupabaseStorageService(StorageService):
@@ -30,7 +45,12 @@ class SupabaseStorageService(StorageService):
         """Upload CV to Supabase Storage bucket."""
         # Unique path: cvs/{user_id}/{uuid}_{filename}
         unique_id = str(uuid.uuid4())[:8]
-        storage_path = f"{user_id}/{unique_id}_{filename}"
+        safe_filename = _sanitize_filename(filename)
+        storage_path = f"{user_id}/{unique_id}_{safe_filename}"
+
+        # Ensure the bucket exists
+        with contextlib.suppress(Exception):
+            self._client.storage.create_bucket(CV_BUCKET, options={"public": False})
 
         try:
             self._client.storage.from_(CV_BUCKET).upload(

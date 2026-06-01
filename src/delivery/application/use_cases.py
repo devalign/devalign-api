@@ -59,7 +59,6 @@ class GetCurrentUserUseCase:
         )
 
 
-
 class UploadCVUseCase:
     """Handle CV file upload to Supabase Storage and persist metadata."""
 
