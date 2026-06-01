@@ -68,16 +68,22 @@ class LocalEmbeddingService(EmbeddingService):
 class OpenAIEmbeddingService(EmbeddingService):
     """Embedding service using OpenAI text-embedding-3-small API."""
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small") -> None:
+    def __init__(
+        self, api_key: str, model: str = "text-embedding-3-small", dimensions: int = 384
+    ) -> None:
         self._api_key = api_key
         self._model = model
+        self._dimensions = dimensions
 
     async def embed_text(self, text: str) -> list[float]:
         try:
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=self._api_key)
-            response = await client.embeddings.create(input=text, model=self._model)
+            kwargs: dict[str, Any] = {"input": text, "model": self._model}
+            if "text-embedding-3" in self._model:
+                kwargs["dimensions"] = self._dimensions
+            response = await client.embeddings.create(**kwargs)
             return response.data[0].embedding
         except Exception as exc:
             logger.error("OpenAI embedding failed", error=str(exc))
@@ -88,18 +94,155 @@ class OpenAIEmbeddingService(EmbeddingService):
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=self._api_key)
-            response = await client.embeddings.create(input=texts, model=self._model)
+            kwargs: dict[str, Any] = {"input": texts, "model": self._model}
+            if "text-embedding-3" in self._model:
+                kwargs["dimensions"] = self._dimensions
+            response = await client.embeddings.create(**kwargs)
             return [item.embedding for item in response.data]
         except Exception as exc:
             logger.error("OpenAI batch embedding failed", error=str(exc))
             raise ExternalServiceError("OpenAI embedding service unavailable") from exc
 
 
+class GroqEmbeddingService(EmbeddingService):
+    """Embedding service using Groq's nomic-embed-text-v1.5 API."""
+
+    def __init__(
+        self, api_key: str, model: str = "nomic-embed-text-v1.5", dimensions: int = 384
+    ) -> None:
+        self._api_key = api_key
+        self._model = model
+        self._dimensions = dimensions
+
+    def _truncate_and_normalize(self, vector: list[float]) -> list[float]:
+        truncated = vector[: self._dimensions]
+        import math
+
+        norm = math.sqrt(sum(x**2 for x in truncated))
+        if norm > 0:
+            return [x / norm for x in truncated]
+        return truncated
+
+    async def embed_text(self, text: str) -> list[float]:
+        try:
+            from groq import AsyncGroq
+
+            client = AsyncGroq(api_key=self._api_key)
+            response = await client.embeddings.create(input=text, model=self._model)
+            return self._truncate_and_normalize(cast("list[float]", response.data[0].embedding))
+        except Exception as exc:
+            logger.error("Groq embedding failed", error=str(exc))
+            raise ExternalServiceError("Groq embedding service unavailable") from exc
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        try:
+            from groq import AsyncGroq
+
+            client = AsyncGroq(api_key=self._api_key)
+            response = await client.embeddings.create(input=texts, model=self._model)
+            return cast(
+                "list[list[float]]",
+                [
+                    self._truncate_and_normalize(cast("list[float]", item.embedding))
+                    for item in response.data
+                ],
+            )
+        except Exception as exc:
+            logger.error("Groq batch embedding failed", error=str(exc))
+            raise ExternalServiceError("Groq embedding service unavailable") from exc
+
+
+class HuggingFaceAPIEmbeddingService(EmbeddingService):
+    """Embedding service using Hugging Face's free Inference API."""
+
+    def __init__(self, api_key: str, model: str = "sentence-transformers/all-MiniLM-L6-v2") -> None:
+        self._api_key = api_key
+        self._model = model if "/" in model else f"sentence-transformers/{model}"
+        self._api_url = f"https://api-inference.huggingface.co/models/{self._model}"
+
+    async def embed_text(self, text: str) -> list[float]:
+        import httpx
+
+        headers = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                response = await client.post(
+                    self._api_url,
+                    headers=headers,
+                    json={"inputs": [text]},
+                )
+                if response.status_code != 200:
+                    logger.error(
+                        "Hugging Face API failed",
+                        status=response.status_code,
+                        body=response.text,
+                    )
+                    raise ExternalServiceError("Hugging Face embedding service failed")
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    if isinstance(data[0], list):
+                        return cast("list[float]", data[0])
+                    elif isinstance(data[0], float):
+                        return cast("list[float]", data)
+                raise ValueError("Unexpected Hugging Face API response format")
+            except Exception as exc:
+                logger.error("Hugging Face embedding failed", error=str(exc))
+                raise ExternalServiceError("Hugging Face embedding service unavailable") from exc
+
+    async def embed_batch(self, texts: list[str]) -> list[list[float]]:
+        import httpx
+
+        headers = {}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            try:
+                response = await client.post(
+                    self._api_url,
+                    headers=headers,
+                    json={"inputs": texts},
+                )
+                if response.status_code != 200:
+                    logger.error(
+                        "Hugging Face API failed",
+                        status=response.status_code,
+                        body=response.text,
+                    )
+                    raise ExternalServiceError("Hugging Face embedding service failed")
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    return cast("list[list[float]]", data)
+                raise ValueError("Unexpected Hugging Face API response format")
+            except Exception as exc:
+                logger.error("Hugging Face batch embedding failed", error=str(exc))
+                raise ExternalServiceError("Hugging Face embedding service unavailable") from exc
+
+
 def get_embedding_service() -> EmbeddingService:
     """Factory: returns the configured embedding service."""
     if settings.EMBEDDING_PROVIDER == "openai":
+        from src.ml_engine.infrastructure.models import EMBEDDING_DIM
+
         return OpenAIEmbeddingService(
             api_key=settings.OPENAI_API_KEY,
+            model=settings.EMBEDDING_MODEL,
+            dimensions=EMBEDDING_DIM,
+        )
+    elif settings.EMBEDDING_PROVIDER == "groq":
+        from src.ml_engine.infrastructure.models import EMBEDDING_DIM
+
+        return GroqEmbeddingService(
+            api_key=settings.GROQ_API_KEY,
+            model=settings.EMBEDDING_MODEL,
+            dimensions=EMBEDDING_DIM,
+        )
+    elif settings.EMBEDDING_PROVIDER == "huggingface":
+        return HuggingFaceAPIEmbeddingService(
+            api_key=settings.HF_API_KEY,
             model=settings.EMBEDDING_MODEL,
         )
     # Default: local sentence-transformers

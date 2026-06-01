@@ -37,9 +37,7 @@ class SQLRoadmapRepository(RoadmapRepository):
         diag_result = await self._session.execute(diag_stmt)
         diag_model = diag_result.scalar_one_or_none()
         if not diag_model:
-            raise MLPipelineError(
-                f"No diagnostic found for profile of user_id {roadmap.user_id}"
-            )
+            raise MLPipelineError(f"No diagnostic found for profile of user_id {roadmap.user_id}")
 
         # Build JSON serialization
         roadmap_json: dict[str, Any] = {
@@ -65,10 +63,10 @@ class SQLRoadmapRepository(RoadmapRepository):
                             "estimated_hours": r.estimated_hours,
                         }
                         for r in p.resources
-                    ]
+                    ],
                 }
                 for p in roadmap.phases
-            ]
+            ],
         }
 
         # Check if roadmap model already exists

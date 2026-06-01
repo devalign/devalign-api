@@ -54,6 +54,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         profile_model.education = profile.education
         profile_model.certifications = profile.certifications
         profile_model.cv_embedding = profile.embedding
+        profile_model.cv_id = profile.cv_id
 
         await self._session.flush()
 
@@ -156,7 +157,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         if not diagnostic_model:
             return UserProfile(
                 user_id=profile_model.user_id,
-                cv_id=uuid4(),
+                cv_id=profile_model.cv_id or uuid4(),
                 embedding=[],
                 detected_skills=[],
                 seniority=SeniorityLevel.JUNIOR,
@@ -214,8 +215,10 @@ class SQLUserProfileRepository(UserProfileRepository):
 
         return UserProfile(
             user_id=profile_model.user_id,
-            cv_id=uuid4(),
-            embedding=list(profile_model.cv_embedding) if profile_model.cv_embedding is not None else [],
+            cv_id=profile_model.cv_id or uuid4(),
+            embedding=list(profile_model.cv_embedding)
+            if profile_model.cv_embedding is not None
+            else [],
             detected_skills=detected_skills,
             seniority=SeniorityLevel.MID,
             primary_affinity=primary_affinity,

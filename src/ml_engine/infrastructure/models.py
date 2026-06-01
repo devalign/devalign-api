@@ -146,11 +146,18 @@ class ProfileModel(Base):
     preferred_modality: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cv_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     cv_raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    cv_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     # pgvector embedding of the CV raw text — used for cosine similarity vs cluster centroids
     cv_embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
-    work_experience: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    education: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    certifications: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    work_experience: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    education: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    certifications: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
     location: Mapped[str | None] = mapped_column(String(100), nullable=True)
     availability: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

@@ -81,7 +81,9 @@ class RoadmapModel(Base):
         ]
         return Roadmap(
             id=self.roadmap_id,
-            user_id=UUID(self.roadmap_json.get("user_id")) if self.roadmap_json.get("user_id") else uuid4(),
+            user_id=UUID(self.roadmap_json.get("user_id"))
+            if self.roadmap_json.get("user_id")
+            else uuid4(),
             specialty=self.roadmap_json.get("specialty", ""),
             seniority=self.roadmap_json.get("seniority", ""),
             phases=phases,
