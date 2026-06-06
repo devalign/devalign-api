@@ -10,6 +10,7 @@ Both implement EmbeddingService port — swappable via config.
 from typing import Any, cast
 
 import structlog
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 from src.config import settings
 from src.ml_engine.domain.ports import EmbeddingService
@@ -160,6 +161,12 @@ class HuggingFaceAPIEmbeddingService(EmbeddingService):
         self._model = model if "/" in model else f"sentence-transformers/{model}"
         self._api_url = f"https://api-inference.huggingface.co/models/{self._model}"
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=15),
+        retry=retry_if_exception_type(ExternalServiceError),
+        reraise=True,
+    )
     async def embed_text(self, text: str) -> list[float]:
         import httpx
 
@@ -192,6 +199,12 @@ class HuggingFaceAPIEmbeddingService(EmbeddingService):
                 logger.error("Hugging Face embedding failed", error=str(exc))
                 raise ExternalServiceError("Hugging Face embedding service unavailable") from exc
 
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, min=2, max=15),
+        retry=retry_if_exception_type(ExternalServiceError),
+        reraise=True,
+    )
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         import httpx
 

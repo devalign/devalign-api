@@ -89,15 +89,21 @@ class ProfileUserFromCVUseCase:
                 raise MLPipelineError("No tech clusters available — run clustering first")
 
             # Step 5: Compute cosine similarity per cluster
-            affinities = []
-            for cluster in clusters:
-                if not cluster.centroid_skills:
-                    continue
-                # Use cluster name + skills as centroid text representation
+            active_clusters = [c for c in clusters if c.centroid_skills]
+            centroid_texts = []
+            for cluster in active_clusters:
                 centroid_text = f"{cluster.name}: " + ", ".join(
                     s.normalized_name for s in cluster.centroid_skills
                 )
-                centroid_embedding = await self._embedder.embed_text(centroid_text)
+                centroid_texts.append(centroid_text)
+
+            centroid_embeddings = []
+            if centroid_texts:
+                logger.info("Generating centroid embeddings in batch", count=len(centroid_texts))
+                centroid_embeddings = await self._embedder.embed_batch(centroid_texts)
+
+            affinities = []
+            for cluster, centroid_embedding in zip(active_clusters, centroid_embeddings, strict=True):
                 score = _cosine_similarity(cv_embedding, centroid_embedding)
                 affinities.append(
                     ClusterAffinity(
