@@ -10,7 +10,7 @@ Both implement EmbeddingService port — swappable via config.
 from typing import Any, cast
 
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.config import settings
 from src.ml_engine.domain.ports import EmbeddingService
