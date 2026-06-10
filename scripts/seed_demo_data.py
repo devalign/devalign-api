@@ -1,21 +1,21 @@
 """Development seed script for Devalign tech clusters and skills."""
 
 import asyncio
-import random
-from uuid import uuid4
-import sys
 import os
+import random
+import sys
+from uuid import uuid4
 
 # Append src/ to path so we can import local modules
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from src.shared.database import AsyncSessionLocal
 from src.ml_engine.infrastructure.models import (
+    EMBEDDING_DIM,
     ClusterModel,
     ClusterSkillModel,
     SkillModel,
-    EMBEDDING_DIM,
 )
+from src.shared.database import AsyncSessionLocal
 
 
 async def seed() -> None:
@@ -108,6 +108,7 @@ async def seed() -> None:
     try:
         # Cache existing skills to avoid duplicates
         from sqlalchemy import select
+
         existing_skills_res = await session.execute(select(SkillModel))
         skill_cache = {s.name.lower(): s for s in existing_skills_res.scalars().all()}
 

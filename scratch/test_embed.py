@@ -1,12 +1,13 @@
 import asyncio
-import sys
 import os
+import sys
 
 # Add src to python path
 sys.path.append(os.path.abspath("."))
 
-from src.ml_engine.infrastructure.embeddings import get_embedding_service
 from src.config import settings
+from src.ml_engine.infrastructure.embeddings import get_embedding_service
+
 
 async def main():
     print("Getting embedding service...")
@@ -18,10 +19,11 @@ async def main():
     try:
         vector = await asyncio.wait_for(service.embed_text("test"), timeout=30.0)
         print(f"Embedding success! Vector len: {len(vector)}")
-    except asyncio.TimeoutError:
+    except TimeoutError:
         print("TIMEOUT: Embedding generation hung and took more than 30 seconds.")
     except Exception as e:
-        print(f"ERROR: {type(e).__name__}: {str(e)}")
+        print(f"ERROR: {type(e).__name__}: {e!s}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

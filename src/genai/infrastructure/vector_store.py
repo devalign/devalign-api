@@ -62,11 +62,11 @@ class PGVectorStore(VectorStorePort):
                             timeout=60.0,
                         )
                         if response.status_code != 200:
-                            raise RuntimeError(
-                                f"Voyage AI Inference API failed: {response.text}"
-                            )
+                            raise RuntimeError(f"Voyage AI Inference API failed: {response.text}")
                         data = response.json()
-                        return cast("list[list[float]]", [item["embedding"] for item in data["data"]])
+                        return cast(
+                            "list[list[float]]", [item["embedding"] for item in data["data"]]
+                        )
 
                     def embed_query(self, text: str) -> list[float]:
                         import httpx
@@ -82,9 +82,7 @@ class PGVectorStore(VectorStorePort):
                             timeout=30.0,
                         )
                         if response.status_code != 200:
-                            raise RuntimeError(
-                                f"Voyage AI Inference API failed: {response.text}"
-                            )
+                            raise RuntimeError(f"Voyage AI Inference API failed: {response.text}")
                         data = response.json()
                         return cast("list[float]", data["data"][0]["embedding"])
 

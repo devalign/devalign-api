@@ -5,6 +5,7 @@ import re
 import time
 import unicodedata
 import uuid
+from typing import ClassVar
 from uuid import UUID
 
 import structlog
@@ -35,7 +36,7 @@ class SupabaseStorageService(StorageService):
 
     # Class-level cache: {storage_path: (signed_url, expires_at)}
     # Shared across instances to reduce Supabase requests on frontend polling
-    _url_cache: dict[str, tuple[str, float]] = {}
+    _url_cache: ClassVar[dict[str, tuple[str, float]]] = {}
 
     def __init__(self, client: Client) -> None:
         self._client = client

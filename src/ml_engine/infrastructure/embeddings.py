@@ -7,15 +7,14 @@ Strategy:
 Both implement EmbeddingService port — swappable via config.
 """
 
-from typing import cast
+from typing import Any, cast
 
 import structlog
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from src.config import settings
 from src.ml_engine.domain.ports import EmbeddingService
 from src.shared.exceptions import ExternalServiceError
-
 
 logger = structlog.get_logger(__name__)
 
@@ -120,7 +119,7 @@ class OpenAIEmbeddingService(EmbeddingService):
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=self._api_key)
-            kwargs = {"input": text, "model": self._model}
+            kwargs: dict[str, Any] = {"input": text, "model": self._model}
             if "text-embedding-3" in self._model:
                 kwargs["dimensions"] = self._dimensions
             response = await client.embeddings.create(**kwargs)
@@ -134,7 +133,7 @@ class OpenAIEmbeddingService(EmbeddingService):
             from openai import AsyncOpenAI
 
             client = AsyncOpenAI(api_key=self._api_key)
-            kwargs = {"input": texts, "model": self._model}
+            kwargs: dict[str, Any] = {"input": texts, "model": self._model}
             if "text-embedding-3" in self._model:
                 kwargs["dimensions"] = self._dimensions
             response = await client.embeddings.create(**kwargs)
