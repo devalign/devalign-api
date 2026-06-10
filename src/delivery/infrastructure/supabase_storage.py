@@ -2,8 +2,10 @@
 
 import contextlib
 import re
+import time
 import unicodedata
 import uuid
+from typing import ClassVar
 from uuid import UUID
 
 import structlog
@@ -31,6 +33,10 @@ def _sanitize_filename(filename: str) -> str:
 
 class SupabaseStorageService(StorageService):
     """Implements StorageService port using Supabase Storage."""
+
+    # Class-level cache: {storage_path: (signed_url, expires_at)}
+    # Shared across instances to reduce Supabase requests on frontend polling
+    _url_cache: ClassVar[dict[str, tuple[str, float]]] = {}
 
     def __init__(self, client: Client) -> None:
         self._client = client
@@ -65,13 +71,24 @@ class SupabaseStorageService(StorageService):
             raise ExternalServiceError("Failed to upload CV to storage") from exc
 
     async def get_signed_url(self, storage_path: str, expires_in: int = 3600) -> str:
-        """Generate a signed URL for temporary file access."""
+        """Generate a signed URL for temporary file access, using a class-level cache to reduce API calls."""
+        now = time.time()
+        # Reuse cached URL if it has at least 5 minutes of validity remaining
+        if storage_path in self._url_cache:
+            url, expires_at = self._url_cache[storage_path]
+            if expires_at - now > 300:
+                logger.debug("Using cached signed URL", path=storage_path)
+                return url
+
         try:
             result = self._client.storage.from_(CV_BUCKET).create_signed_url(
                 path=storage_path,
                 expires_in=expires_in,
             )
-            return str(result["signedURL"])
+            url = str(result["signedURL"])
+            # Cache URL with exact expiration timestamp
+            self._url_cache[storage_path] = (url, now + expires_in)
+            return url
         except Exception as exc:
             logger.error("Failed to create signed URL", path=storage_path, error=str(exc))
             raise ExternalServiceError("Failed to generate download URL") from exc

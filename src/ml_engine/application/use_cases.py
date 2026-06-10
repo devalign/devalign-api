@@ -103,7 +103,9 @@ class ProfileUserFromCVUseCase:
                 centroid_embeddings = await self._embedder.embed_batch(centroid_texts)
 
             affinities = []
-            for cluster, centroid_embedding in zip(active_clusters, centroid_embeddings, strict=True):
+            for cluster, centroid_embedding in zip(
+                active_clusters, centroid_embeddings, strict=True
+            ):
                 score = _cosine_similarity(cv_embedding, centroid_embedding)
                 affinities.append(
                     ClusterAffinity(

@@ -22,9 +22,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.shared.database import Base
 
-# Embedding dimension for all-MiniLM-L6-v2 (sentence-transformers)
+# Embedding dimension for voyage-4-lite (Voyage AI)
 # Change this constant if switching embedding models — also update Alembic migration.
-EMBEDDING_DIM = 384
+EMBEDDING_DIM = 1024
 
 
 class SkillModel(Base):
