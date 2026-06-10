@@ -52,11 +52,11 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "llama-3.1-70b-versatile"
     GROQ_API_KEY: str = Field(default="", description="Groq API key")
     OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
-    HF_API_KEY: str = Field(default="", description="Hugging Face API token/key")
+    VOYAGE_API_KEY: str = Field(default="", description="Voyage AI API key")
 
     # === Embeddings Configuration ===
-    EMBEDDING_PROVIDER: Literal["local", "openai", "groq", "huggingface"] = "local"
-    EMBEDDING_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    EMBEDDING_PROVIDER: Literal["openai", "voyage"] = "voyage"
+    EMBEDDING_MODEL: str = "voyage-4-lite"
 
     # === Security ===
     SECRET_KEY: str = Field(

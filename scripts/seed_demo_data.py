@@ -10,16 +10,21 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.shared.database import AsyncSessionLocal
-from src.ml_engine.infrastructure.models import ClusterModel, ClusterSkillModel, SkillModel
+from src.ml_engine.infrastructure.models import (
+    ClusterModel,
+    ClusterSkillModel,
+    SkillModel,
+    EMBEDDING_DIM,
+)
 
 
 async def seed() -> None:
     print("Starting development database seeding...")
     session = AsyncSessionLocal()
 
-    # Generate a random unit vector for centroids (384 dimensions)
+    # Generate a random unit vector for centroids
     def make_mock_vector():
-        vec = [random.uniform(-1, 1) for _ in range(384)]
+        vec = [random.uniform(-1, 1) for _ in range(EMBEDDING_DIM)]
         norm = sum(x**2 for x in vec) ** 0.5
         return [x / norm for x in vec]
 

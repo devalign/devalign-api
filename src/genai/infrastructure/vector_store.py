@@ -27,10 +27,7 @@ class PGVectorStore(VectorStorePort):
     def _get_store(self) -> PGVector:
         """Lazy initialize PGVector store."""
         if self._store is None:
-            from langchain_community.embeddings import HuggingFaceEmbeddings
-
-            from src.config import settings as cfg
-
+            cfg = settings
             embeddings: Any = None
             if cfg.EMBEDDING_PROVIDER == "openai":
                 from langchain_openai import OpenAIEmbeddings
@@ -42,110 +39,61 @@ class PGVectorStore(VectorStorePort):
                     model=cfg.EMBEDDING_MODEL,
                     dimensions=EMBEDDING_DIM,
                 )
-            elif cfg.EMBEDDING_PROVIDER == "groq":
+            elif cfg.EMBEDDING_PROVIDER == "voyage":
                 from langchain_core.embeddings import Embeddings
 
-                from src.ml_engine.infrastructure.models import EMBEDDING_DIM
-
-                class TruncatedGroqEmbeddings(Embeddings):
-                    def __init__(self, api_key: str, model: str, dimensions: int):
-                        self._api_key = api_key
-                        self._model = model
-                        self._dimensions = dimensions
-
-                    def _truncate_and_normalize(self, vector: list[float]) -> list[float]:
-                        truncated = vector[: self._dimensions]
-                        import math
-
-                        norm = math.sqrt(sum(x**2 for x in truncated))
-                        if norm > 0:
-                            return [x / norm for x in truncated]
-                        return truncated
-
-                    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-                        from groq import Groq
-
-                        client = Groq(api_key=self._api_key)
-                        response = client.embeddings.create(input=texts, model=self._model)
-                        return [
-                            self._truncate_and_normalize(cast("list[float]", item.embedding))
-                            for item in response.data
-                        ]
-
-                    def embed_query(self, text: str) -> list[float]:
-                        from groq import Groq
-
-                        client = Groq(api_key=self._api_key)
-                        response = client.embeddings.create(input=text, model=self._model)
-                        return self._truncate_and_normalize(
-                            cast("list[float]", response.data[0].embedding)
-                        )
-
-                embeddings = TruncatedGroqEmbeddings(
-                    api_key=cfg.GROQ_API_KEY,
-                    model=cfg.EMBEDDING_MODEL,
-                    dimensions=EMBEDDING_DIM,
-                )
-            elif cfg.EMBEDDING_PROVIDER == "huggingface":
-                from langchain_core.embeddings import Embeddings
-
-                class HuggingFaceAPIEmbeddings(Embeddings):
+                class VoyageAIEmbeddings(Embeddings):
                     def __init__(self, api_key: str, model_name: str):
                         self._api_key = api_key
-                        self._model = (
-                            model_name
-                            if "/" in model_name
-                            else f"sentence-transformers/{model_name}"
-                        )
-                        self._api_url = f"https://api-inference.huggingface.co/models/{self._model}"
+                        self._model = model_name
+                        self._api_url = "https://api.voyageai.com/v1/embeddings"
 
                     def embed_documents(self, texts: list[str]) -> list[list[float]]:
                         import httpx
 
-                        headers = {}
-                        if self._api_key:
-                            headers["Authorization"] = f"Bearer {self._api_key}"
+                        headers = {
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        }
                         response = httpx.post(
                             self._api_url,
                             headers=headers,
-                            json={"inputs": texts},
+                            json={"input": texts, "model": self._model},
                             timeout=60.0,
                         )
                         if response.status_code != 200:
                             raise RuntimeError(
-                                f"Hugging Face Inference API failed: {response.text}"
+                                f"Voyage AI Inference API failed: {response.text}"
                             )
-                        return cast("list[list[float]]", response.json())
+                        data = response.json()
+                        return cast("list[list[float]]", [item["embedding"] for item in data["data"]])
 
                     def embed_query(self, text: str) -> list[float]:
                         import httpx
 
-                        headers = {}
-                        if self._api_key:
-                            headers["Authorization"] = f"Bearer {self._api_key}"
+                        headers = {
+                            "Authorization": f"Bearer {self._api_key}",
+                            "Content-Type": "application/json",
+                        }
                         response = httpx.post(
                             self._api_url,
                             headers=headers,
-                            json={"inputs": [text]},
+                            json={"input": [text], "model": self._model},
                             timeout=30.0,
                         )
                         if response.status_code != 200:
                             raise RuntimeError(
-                                f"Hugging Face Inference API failed: {response.text}"
+                                f"Voyage AI Inference API failed: {response.text}"
                             )
                         data = response.json()
-                        if isinstance(data, list) and len(data) > 0:
-                            if isinstance(data[0], list):
-                                return cast("list[float]", data[0])
-                            return cast("list[float]", data)
-                        raise ValueError("Unexpected Hugging Face API response format")
+                        return cast("list[float]", data["data"][0]["embedding"])
 
-                embeddings = HuggingFaceAPIEmbeddings(
-                    api_key=cfg.HF_API_KEY,
+                embeddings = VoyageAIEmbeddings(
+                    api_key=cfg.VOYAGE_API_KEY,
                     model_name=cfg.EMBEDDING_MODEL,
                 )
             else:
-                embeddings = HuggingFaceEmbeddings(model_name=cfg.EMBEDDING_MODEL)
+                raise ValueError(f"Unsupported embedding provider: {cfg.EMBEDDING_PROVIDER}")
 
             self._store = PGVector(
                 connection_string=settings.DATABASE_URL.replace("+asyncpg", ""),
