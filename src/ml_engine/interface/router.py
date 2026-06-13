@@ -49,6 +49,8 @@ async def analyze_cv(
     """
     from uuid import uuid4
 
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
+
     content = await file.read()
     cv_id = uuid4()  # Temporary CV ID — persisted in full flow
 
@@ -58,6 +60,7 @@ async def analyze_cv(
         cluster_repository=SQLClusterRepository(session),
         profile_repository=SQLUserProfileRepository(session),
         llm_service=get_llm_service(),
+        skill_repository=SQLSkillRepository(session),
     )
     return await use_case.execute(
         user_id=UUID(current_user_id),
@@ -122,12 +125,18 @@ async def get_my_profile(
 
     from fastapi import HTTPException
 
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+
     repo = SQLUserProfileRepository(session)
-    profile = await repo.get_by_user_id(UUID(current_user_id))
-    if not profile:
+    cluster_repo = SQLClusterRepository(session)
+    use_case = GetMyProfileUseCase(repo, cluster_repo)
+
+    dto = await use_case.execute(UUID(current_user_id))
+    if not dto:
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
 
-    return _map_entity_to_dto(profile)
+    return dto
 
 
 @router.patch(
@@ -173,7 +182,15 @@ async def update_my_profile(
     updated_profile = replace(profile, **kwargs)
     await repo.save(updated_profile)
 
-    return _map_entity_to_dto(updated_profile)
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
+        UUID(current_user_id)
+    )
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after update")
+    return dto
 
 
 @router.put(
@@ -223,7 +240,15 @@ async def update_my_skills(
     updated_profile = replace(profile, detected_skills=detected_skills, skill_gaps=skill_gaps)
     await repo.save(updated_profile)
 
-    return _map_entity_to_dto(updated_profile)
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
+        UUID(current_user_id)
+    )
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after update")
+    return dto
 
 
 def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:

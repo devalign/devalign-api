@@ -116,6 +116,7 @@ async def run_profile_analysis_task(
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
     from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
     from src.ml_engine.infrastructure.embeddings import get_embedding_service
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
     from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
     from src.shared.database import AsyncSessionLocal
 
@@ -130,6 +131,7 @@ async def run_profile_analysis_task(
                 cluster_repository=SQLClusterRepository(session),
                 profile_repository=SQLUserProfileRepository(session),
                 llm_service=get_llm_service(),
+                skill_repository=SQLSkillRepository(session),
             )
             await use_case.execute(
                 user_id=user_id,

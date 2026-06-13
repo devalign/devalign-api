@@ -24,6 +24,7 @@ class SQLSkillRepository(SkillRepository):
                 name=m.name,
                 skill_type=SkillType(m.category) if m.category else SkillType.HARD_SKILL,
                 normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
+                weight=float(m.weight),
             )
             for m in models
         ]
@@ -37,6 +38,7 @@ class SQLSkillRepository(SkillRepository):
             SkillModel(
                 name=s.name,
                 category=s.skill_type.value,
+                weight=s.weight,
             )
             for s in skills
         ]
@@ -49,6 +51,7 @@ class SQLSkillRepository(SkillRepository):
                 name=m.name,
                 skill_type=SkillType(m.category) if m.category else SkillType.HARD_SKILL,
                 normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
+                weight=float(m.weight),
             )
             for m in models
         ]

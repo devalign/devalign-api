@@ -18,6 +18,12 @@ class SkillDTO(BaseModel):
     skill_type: str
     market_importance: str | None = None
     sfia_reference: str | None = None
+    market_demand_percentage: int | None = None
+
+
+class DomainAffinityDTO(BaseModel):
+    domain: str
+    affinity_score: float
 
 
 class ClusterAffinityDTO(BaseModel):
@@ -25,6 +31,8 @@ class ClusterAffinityDTO(BaseModel):
     cluster_name: str
     affinity_score: float = Field(ge=0.0, le=1.0)
     is_primary: bool
+    market_insights: dict[str, Any] | None = None
+    compatible_roles: list[dict[str, Any]] | None = None
 
 
 class UserProfileDTO(BaseModel):
@@ -36,6 +44,8 @@ class UserProfileDTO(BaseModel):
     primary_specialty: str
     alignment_score: float = Field(ge=0.0, le=1.0)
     secondary_affinities: list[ClusterAffinityDTO] = []
+    all_affinities: list[ClusterAffinityDTO] = []
+    domain_affinities: list[DomainAffinityDTO] = []
     detected_skills: list[SkillDTO] = []
     skill_gaps: list[SkillDTO] = []
     full_name: str | None = None

@@ -29,6 +29,9 @@ class Skill:
     name: str
     skill_type: SkillType
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
+    weight: float = 1.0
+    frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
+    domain: str | None = None
     id: UUID | None = None
 
 
@@ -42,6 +45,8 @@ class TechCluster:
     centroid_skills: list[Skill]  # Most representative skills
     job_offer_count: int  # How many offers belong to this cluster
     cluster_index: int  # K-Prototypes cluster number
+    market_insights: dict[str, Any] = field(default_factory=dict)
+    compatible_roles: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,8 @@ class ClusterAffinity:
     cluster_name: str
     affinity_score: float  # Cosine similarity [0, 1]
     is_primary: bool  # Highest score = primary specialty
+    market_insights: dict[str, Any] = field(default_factory=dict)
+    compatible_roles: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

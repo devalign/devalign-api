@@ -84,20 +84,24 @@ class SQLUserProfileRepository(UserProfileRepository):
         for skill_name in skill_names:
             norm_name = skill_name.lower()
             if norm_name not in db_skills:
-                category = "hard_skill"
+                # Find the skill in profile.detected_skills or profile.skill_gaps to get the correct properties
+                weight = 1.0
                 for s in profile.detected_skills:
                     if s.name == skill_name:
                         category = s.skill_type.value
+                        weight = s.weight
                         break
                 for g in profile.skill_gaps:
                     if g.skill.name == skill_name:
                         category = g.skill.skill_type.value
+                        weight = g.skill.weight
                         break
 
                 new_skill_model = SkillModel(
                     skill_id=uuid4(),
                     name=skill_name,
                     category=category,
+                    weight=weight,
                 )
                 self._session.add(new_skill_model)
                 db_skills[norm_name] = new_skill_model
@@ -112,7 +116,7 @@ class SQLUserProfileRepository(UserProfileRepository):
                 diagnostic_id=diagnostic_model.diagnostic_id,
                 skill_id=skill_model.skill_id,
                 skill_status="consolidated",
-                importance_score=1.0,
+                importance_score=skill.frequency,
             )
             self._session.add(diag_skill)
 
@@ -123,7 +127,7 @@ class SQLUserProfileRepository(UserProfileRepository):
                 diagnostic_id=diagnostic_model.diagnostic_id,
                 skill_id=skill_model.skill_id,
                 skill_status="gap",
-                importance_score=1.0,
+                importance_score=gap.skill.frequency,
             )
             self._session.add(diag_skill)
 
@@ -193,14 +197,24 @@ class SQLUserProfileRepository(UserProfileRepository):
                 if ds.skill.category
                 else SkillType.HARD_SKILL,
                 normalized_name=ds.skill.name.lower().replace(" ", "").replace(".", ""),
+                weight=float(ds.skill.weight),
+                frequency=float(ds.importance_score) if ds.importance_score is not None else 1.0,
             )
             if ds.skill_status == "consolidated":
                 detected_skills.append(skill_entity)
             elif ds.skill_status == "gap":
+                priority = skill_entity.weight * skill_entity.frequency
+                if priority >= 2.0:
+                    importance = "critical"
+                elif priority >= 1.0:
+                    importance = "high"
+                else:
+                    importance = "medium"
+
                 skill_gaps.append(
                     SkillGap(
                         skill=skill_entity,
-                        market_importance="high",
+                        market_importance=importance,
                     )
                 )
 
