@@ -48,6 +48,9 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = Field(
         default="", description="Supabase service role key (server-side only)"
     )
+    SUPABASE_JWT_SECRET: str = Field(
+        default="", description="Supabase JWT secret key"
+    )
 
     # === LLM Configuration ===
     LLM_PROVIDER: Literal["groq", "openai"] = "groq"
