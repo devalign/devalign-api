@@ -8,13 +8,20 @@ from uuid import UUID
 import structlog
 
 from src.genai.domain.ports import LLMService
-from src.ml_engine.application.dtos import ClusterAffinityDTO, ClusterDTO, SkillDTO, UserProfileDTO
+from src.ml_engine.application.dtos import (
+    ClusterAffinityDTO,
+    ClusterDTO,
+    DomainAffinityDTO,
+    SkillDTO,
+    UserProfileDTO,
+)
 from src.ml_engine.domain.entities import (
     ClusterAffinity,
     SeniorityLevel,
     Skill,
     SkillGap,
     SkillType,
+    TechCluster,
     UserProfile,
 )
 from src.ml_engine.domain.ports import (
@@ -61,7 +68,9 @@ class ProfileUserFromCVUseCase:
         self._llm = llm_service
         self._skills = skill_repository
 
-    async def _normalize_user_skills(self, raw_skills: dict[str, list[str]] | list[str] | Any) -> list[Skill]:
+    async def _normalize_user_skills(
+        self, raw_skills: dict[str, list[str]] | list[str] | Any
+    ) -> list[Skill]:
         import difflib
 
         # Load all canonical skills
@@ -77,7 +86,7 @@ class ProfileUserFromCVUseCase:
                 "technical": raw_skills,
                 "soft": [],
                 "tools": [],
-                "methodologies": []
+                "methodologies": [],
             }
         elif isinstance(raw_skills, dict):
             raw_skills_dict = raw_skills
@@ -88,7 +97,7 @@ class ProfileUserFromCVUseCase:
             "technical": SkillType.HARD_SKILL,
             "soft": SkillType.SOFT_SKILL,
             "tools": SkillType.TOOL,
-            "methodologies": SkillType.METHODOLOGY
+            "methodologies": SkillType.METHODOLOGY,
         }
 
         for category_key, skill_type in cat_mapping.items():
@@ -107,7 +116,9 @@ class ProfileUserFromCVUseCase:
                     normalized_skills.append(existing_skills_map[norm_name])
                 else:
                     # Fuzzy match against existing skills
-                    matches = difflib.get_close_matches(norm_name, list(existing_skills_map.keys()), n=1, cutoff=0.85)
+                    matches = difflib.get_close_matches(
+                        norm_name, list(existing_skills_map.keys()), n=1, cutoff=0.85
+                    )
                     if matches:
                         normalized_skills.append(existing_skills_map[matches[0]])
                     else:
@@ -116,7 +127,7 @@ class ProfileUserFromCVUseCase:
                             skill_type=skill_type,
                             normalized_name=norm_name,
                             weight=1.0,
-                            frequency=1.0
+                            frequency=1.0,
                         )
                         new_skills_to_create.append(new_skill)
 
@@ -148,7 +159,6 @@ class ProfileUserFromCVUseCase:
 
             # Step 2: Run LLM structured extraction
             logger.info("Extracting structured info using LLM")
-            llm_failed = False
             try:
                 prompt = _build_cv_extraction_prompt(cv_text)
                 raw_llm_output = await self._llm.generate(prompt=prompt, context=[])
@@ -157,7 +167,10 @@ class ProfileUserFromCVUseCase:
                     # If empty dict returned from parsing, treat as fallback trigger
                     raise ValueError("Empty extraction data parsed")
             except Exception as e:
-                logger.warning("LLM structured extraction failed, using mock profile data fallback", error=str(e))
+                logger.warning(
+                    "LLM structured extraction failed, using mock profile data fallback",
+                    error=str(e),
+                )
                 extracted_data = {
                     "full_name": "Usuario Simulado",
                     "current_job_role": "Backend Engineer",
@@ -169,7 +182,7 @@ class ProfileUserFromCVUseCase:
                         "technical": ["Python", "SQL", "NoSQL"],
                         "soft": ["Liderazgo", "Comunicación"],
                         "tools": ["Docker", "Kubernetes", "Git"],
-                        "methodologies": ["Scrum", "Microservicios"]
+                        "methodologies": ["Scrum", "Microservicios"],
                     },
                     "work_experience": [
                         {
@@ -196,7 +209,6 @@ class ProfileUserFromCVUseCase:
                         }
                     ],
                 }
-                llm_failed = True
 
             # Step 3: Embed CV text (kept for backwards compatibility/fallback vector)
             logger.info("Generating CV embedding")
@@ -220,7 +232,11 @@ class ProfileUserFromCVUseCase:
                 raise MLPipelineError("No active clusters with centroid skills available")
 
             # Step 6: Compute Weighted Jaccard Similarity per cluster
-            primary, secondaries, affinities, _ = compute_affinities_and_domains(detected_skills, active_clusters)
+            primary, secondaries, affinities, _ = compute_affinities_and_domains(
+                detected_skills, active_clusters
+            )
+            if not primary:
+                raise MLPipelineError("No primary cluster affinity computed")
 
             # Step 7: Seniority estimation
             years_exp = extracted_data.get("years_experience")
@@ -240,13 +256,15 @@ class ProfileUserFromCVUseCase:
 
             if primary_cluster:
                 user_hard_skills = [
-                    s for s in detected_skills
+                    s
+                    for s in detected_skills
                     if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
                 ]
                 user_hard_norms = {s.normalized_name: s for s in user_hard_skills}
 
                 primary_cluster_hard_skills = [
-                    s for s in primary_cluster.centroid_skills
+                    s
+                    for s in primary_cluster.centroid_skills
                     if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
                 ]
                 for skill in primary_cluster_hard_skills:
@@ -266,10 +284,7 @@ class ProfileUserFromCVUseCase:
                             )
                         )
                 # Sort gaps by importance priority
-                skill_gaps.sort(
-                    key=lambda g: g.skill.weight * g.skill.frequency,
-                    reverse=True
-                )
+                skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
             # Step 9: Persist profile
             profile = UserProfile(
@@ -301,7 +316,9 @@ class ProfileUserFromCVUseCase:
             )
 
             # Compute Domain Affinities
-            _, _, _, domain_affinities_dto = compute_affinities_and_domains(detected_skills, active_clusters)
+            _, _, _, domain_affinities_dto = compute_affinities_and_domains(
+                detected_skills, active_clusters
+            )
 
             # Map DTOs
             return UserProfileDTO(
@@ -338,15 +355,20 @@ class ProfileUserFromCVUseCase:
                         name=s.name,
                         skill_type=s.skill_type.value,
                         market_importance="consolidated",
-                        market_demand_percentage=round(s.frequency * 100) if s.frequency is not None else 100,
-                    ) for s in detected_skills
+                        market_demand_percentage=round(s.frequency * 100)
+                        if s.frequency is not None
+                        else 100,
+                    )
+                    for s in detected_skills
                 ],
                 skill_gaps=[
                     SkillDTO(
                         name=g.skill.name,
                         skill_type=g.skill.skill_type.value,
                         market_importance=g.market_importance,
-                        market_demand_percentage=round(g.skill.frequency * 100) if g.skill.frequency is not None else None,
+                        market_demand_percentage=round(g.skill.frequency * 100)
+                        if g.skill.frequency is not None
+                        else None,
                     )
                     for g in skill_gaps
                 ],
@@ -642,20 +664,24 @@ class NormalizeSkillsUseCase:
         }
 
 
-def compute_affinities_and_domains(detected_skills, active_clusters):
-    from src.ml_engine.domain.entities import SkillType, ClusterAffinity
-    from src.ml_engine.application.dtos import DomainAffinityDTO
+def compute_affinities_and_domains(
+    detected_skills: list[Skill],
+    active_clusters: list[TechCluster],
+) -> tuple[
+    ClusterAffinity | None, list[ClusterAffinity], list[ClusterAffinity], list[DomainAffinityDTO]
+]:
+    from src.ml_engine.domain.entities import SkillType
 
     user_hard_skills = [
-        s for s in detected_skills
-        if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
+        s for s in detected_skills if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
     ]
     user_hard_norms = {s.normalized_name: s for s in user_hard_skills}
 
     affinities = []
     for cluster in active_clusters:
         cluster_hard_skills = [
-            s for s in cluster.centroid_skills
+            s
+            for s in cluster.centroid_skills
             if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
         ]
         cluster_hard_norms = {s.normalized_name: s for s in cluster_hard_skills}
@@ -720,7 +746,7 @@ def compute_affinities_and_domains(detected_skills, active_clusters):
             if d not in domain_scores:
                 domain_scores[d] = 0.0
             domain_scores[d] += s.weight * s.frequency
-    
+
     total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
     domain_affinities_dto = [
         DomainAffinityDTO(domain=d, affinity_score=score / total_domain_score)
@@ -730,15 +756,21 @@ def compute_affinities_and_domains(detected_skills, active_clusters):
 
     return primary, secondaries, affinities, domain_affinities_dto
 
+
 class GetMyProfileUseCase:
     """Gets the logged-in user's profile and computes real-time affinities against active clusters."""
-    def __init__(self, profile_repository, cluster_repository):
+
+    def __init__(
+        self,
+        profile_repository: UserProfileRepository,
+        cluster_repository: ClusterRepository,
+    ) -> None:
         self._profiles = profile_repository
         self._clusters = cluster_repository
 
-    async def execute(self, user_id) -> "UserProfileDTO | None":
-        from src.ml_engine.application.dtos import UserProfileDTO, ClusterAffinityDTO, SkillDTO
-        
+    async def execute(self, user_id: UUID) -> UserProfileDTO | None:
+        from src.ml_engine.application.dtos import ClusterAffinityDTO, SkillDTO, UserProfileDTO
+
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
             return None
@@ -746,8 +778,8 @@ class GetMyProfileUseCase:
         active_clusters = await self._clusters.get_all_active()
         active_clusters = [c for c in active_clusters if c.centroid_skills]
 
-        primary, secondaries, all_affinities, domain_affinities_dto = compute_affinities_and_domains(
-            profile.detected_skills, active_clusters
+        primary, secondaries, all_affinities, domain_affinities_dto = (
+            compute_affinities_and_domains(profile.detected_skills, active_clusters)
         )
 
         return UserProfileDTO(
@@ -780,11 +812,25 @@ class GetMyProfileUseCase:
             ],
             domain_affinities=domain_affinities_dto if domain_affinities_dto else [],
             detected_skills=[
-                SkillDTO(name=s.name, skill_type=s.skill_type.value, market_importance="consolidated", market_demand_percentage=round(s.frequency * 100) if s.frequency is not None else 100)
+                SkillDTO(
+                    name=s.name,
+                    skill_type=s.skill_type.value,
+                    market_importance="consolidated",
+                    market_demand_percentage=round(s.frequency * 100)
+                    if s.frequency is not None
+                    else 100,
+                )
                 for s in profile.detected_skills
             ],
             skill_gaps=[
-                SkillDTO(name=g.skill.name, skill_type=g.skill.skill_type.value, market_importance=g.market_importance, market_demand_percentage=round(g.skill.frequency * 100) if g.skill.frequency is not None else None)
+                SkillDTO(
+                    name=g.skill.name,
+                    skill_type=g.skill.skill_type.value,
+                    market_importance=g.market_importance,
+                    market_demand_percentage=round(g.skill.frequency * 100)
+                    if g.skill.frequency is not None
+                    else None,
+                )
                 for g in profile.skill_gaps
             ],
             full_name=profile.full_name,
@@ -796,5 +842,5 @@ class GetMyProfileUseCase:
             work_experience=profile.work_experience,
             education=profile.education,
             certifications=profile.certifications,
-            message="Profile retrieved successfully"
+            message="Profile retrieved successfully",
         )

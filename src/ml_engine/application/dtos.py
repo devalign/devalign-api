@@ -25,6 +25,7 @@ class DomainAffinityDTO(BaseModel):
     domain: str
     affinity_score: float
 
+
 class ClusterAffinityDTO(BaseModel):
     cluster_id: UUID
     cluster_name: str

@@ -52,7 +52,9 @@ class SQLClusterRepository(ClusterRepository):
                         else SkillType.HARD_SKILL,
                         normalized_name=cs.skill.name.lower().replace(" ", "").replace(".", ""),
                         weight=float(cs.skill.weight),
-                        frequency=float(cs.importance_score) if cs.importance_score is not None else 1.0,
+                        frequency=float(cs.importance_score)
+                        if cs.importance_score is not None
+                        else 1.0,
                         domain=cs.skill.domain,
                     )
                 )

@@ -48,6 +48,7 @@ async def analyze_cv(
     Returns HTTP 202 as processing may take a few seconds.
     """
     from uuid import uuid4
+
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
 
     content = await file.read()
@@ -121,14 +122,16 @@ async def get_my_profile(
     Returns HTTP 404 if no CV has been analyzed yet.
     """
     from uuid import UUID
+
     from fastapi import HTTPException
+
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 
     repo = SQLUserProfileRepository(session)
     cluster_repo = SQLClusterRepository(session)
     use_case = GetMyProfileUseCase(repo, cluster_repo)
-    
+
     dto = await use_case.execute(UUID(current_user_id))
     if not dto:
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
@@ -181,7 +184,12 @@ async def update_my_profile(
 
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(UUID(current_user_id))
+
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
+        UUID(current_user_id)
+    )
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after update")
     return dto
 
 
@@ -234,7 +242,12 @@ async def update_my_skills(
 
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(UUID(current_user_id))
+
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
+        UUID(current_user_id)
+    )
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after update")
     return dto
 
 

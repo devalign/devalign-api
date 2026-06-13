@@ -75,8 +75,12 @@ class ClusterModel(Base):
     # pgvector column — centroid of all embeddings in this cluster
     # Dimensioned for all-MiniLM-L6-v2 (384 dims)
     centroid_vec: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
-    compatible_roles: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
-    market_insights: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
+    compatible_roles: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+    market_insights: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default="{}"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
