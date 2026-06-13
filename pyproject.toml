@@ -54,6 +54,7 @@ dependencies = [
     "matplotlib>=3.11.0",
     "seaborn>=0.13.2",
     "kneed>=0.8.6",
+    "requests>=2.34.2",
 ]
 
 [project.optional-dependencies]

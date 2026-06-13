@@ -42,6 +42,7 @@ class SkillModel(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     # "hard_skill" | "soft_skill" | "methodology" | "tool"
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    domain: Mapped[str | None] = mapped_column(String(50), nullable=True)
     weight: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="1.0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -74,6 +75,8 @@ class ClusterModel(Base):
     # pgvector column — centroid of all embeddings in this cluster
     # Dimensioned for all-MiniLM-L6-v2 (384 dims)
     centroid_vec: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
+    compatible_roles: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    market_insights: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, server_default="{}")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

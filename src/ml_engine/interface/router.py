@@ -121,15 +121,19 @@ async def get_my_profile(
     Returns HTTP 404 if no CV has been analyzed yet.
     """
     from uuid import UUID
-
     from fastapi import HTTPException
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 
     repo = SQLUserProfileRepository(session)
-    profile = await repo.get_by_user_id(UUID(current_user_id))
-    if not profile:
+    cluster_repo = SQLClusterRepository(session)
+    use_case = GetMyProfileUseCase(repo, cluster_repo)
+    
+    dto = await use_case.execute(UUID(current_user_id))
+    if not dto:
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
 
-    return _map_entity_to_dto(profile)
+    return dto
 
 
 @router.patch(
@@ -175,7 +179,10 @@ async def update_my_profile(
     updated_profile = replace(profile, **kwargs)
     await repo.save(updated_profile)
 
-    return _map_entity_to_dto(updated_profile)
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(UUID(current_user_id))
+    return dto
 
 
 @router.put(
@@ -225,7 +232,10 @@ async def update_my_skills(
     updated_profile = replace(profile, detected_skills=detected_skills, skill_gaps=skill_gaps)
     await repo.save(updated_profile)
 
-    return _map_entity_to_dto(updated_profile)
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(UUID(current_user_id))
+    return dto
 
 
 def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:

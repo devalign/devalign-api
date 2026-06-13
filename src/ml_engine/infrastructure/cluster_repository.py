@@ -53,6 +53,7 @@ class SQLClusterRepository(ClusterRepository):
                         normalized_name=cs.skill.name.lower().replace(" ", "").replace(".", ""),
                         weight=float(cs.skill.weight),
                         frequency=float(cs.importance_score) if cs.importance_score is not None else 1.0,
+                        domain=cs.skill.domain,
                     )
                 )
 
@@ -63,4 +64,6 @@ class SQLClusterRepository(ClusterRepository):
             centroid_skills=centroid_skills,
             job_offer_count=model.job_offer_count,
             cluster_index=0,
+            market_insights=model.market_insights,
+            compatible_roles=model.compatible_roles,
         )
