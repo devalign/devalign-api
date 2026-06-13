@@ -48,6 +48,7 @@ async def analyze_cv(
     Returns HTTP 202 as processing may take a few seconds.
     """
     from uuid import uuid4
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
 
     content = await file.read()
     cv_id = uuid4()  # Temporary CV ID — persisted in full flow
@@ -58,6 +59,7 @@ async def analyze_cv(
         cluster_repository=SQLClusterRepository(session),
         profile_repository=SQLUserProfileRepository(session),
         llm_service=get_llm_service(),
+        skill_repository=SQLSkillRepository(session),
     )
     return await use_case.execute(
         user_id=UUID(current_user_id),

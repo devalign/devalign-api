@@ -51,6 +51,8 @@ class SQLClusterRepository(ClusterRepository):
                         if cs.skill.category
                         else SkillType.HARD_SKILL,
                         normalized_name=cs.skill.name.lower().replace(" ", "").replace(".", ""),
+                        weight=float(cs.skill.weight),
+                        frequency=float(cs.importance_score) if cs.importance_score is not None else 1.0,
                     )
                 )
 
@@ -59,6 +61,6 @@ class SQLClusterRepository(ClusterRepository):
             name=model.name,
             description=model.description or "",
             centroid_skills=centroid_skills,
-            job_offer_count=100,  # default mock count
+            job_offer_count=model.job_offer_count,
             cluster_index=0,
         )

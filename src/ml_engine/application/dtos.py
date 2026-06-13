@@ -18,6 +18,7 @@ class SkillDTO(BaseModel):
     skill_type: str
     market_importance: str | None = None
     sfia_reference: str | None = None
+    market_demand_percentage: int | None = None
 
 
 class ClusterAffinityDTO(BaseModel):

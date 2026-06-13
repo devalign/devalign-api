@@ -29,6 +29,8 @@ class Skill:
     name: str
     skill_type: SkillType
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
+    weight: float = 1.0
+    frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     id: UUID | None = None
 
 
