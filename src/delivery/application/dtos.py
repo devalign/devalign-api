@@ -1,5 +1,6 @@
 """Delivery module application DTOs."""
 
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
@@ -23,6 +24,7 @@ class CVUploadResultDTO(BaseModel):
     original_filename: str
     size_bytes: int
     download_url: str | None = None
+    uploaded_at: datetime | None = None
     message: str = "CV uploaded successfully"
 
 

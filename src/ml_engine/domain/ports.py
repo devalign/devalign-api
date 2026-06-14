@@ -7,17 +7,26 @@ from uuid import UUID
 from src.ml_engine.domain.entities import Skill, TechCluster, UserProfile
 
 
+class LLMService(ABC):
+    """Port for interacting with LLM APIs."""
+
+    @abstractmethod
+    async def generate(self, prompt: str, context: list[Any] | None = None) -> str:
+        """Generate text from a prompt with optional context."""
+        ...
+
+
 class EmbeddingService(ABC):
-    """Port for generating text embeddings."""
+    """Port for generating embeddings from text."""
 
     @abstractmethod
     async def embed_text(self, text: str) -> list[float]:
-        """Generate an embedding vector for the given text."""
+        """Generate an embedding vector for a single text string."""
         ...
 
     @abstractmethod
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Generate embeddings for multiple texts."""
+        """Generate embedding vectors for a list of text strings."""
         ...
 
 

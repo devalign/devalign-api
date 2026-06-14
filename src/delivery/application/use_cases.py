@@ -120,6 +120,7 @@ class UploadCVUseCase:
             original_filename=saved_cv.original_filename,
             size_bytes=saved_cv.size_bytes,
             download_url=download_url,
+            uploaded_at=saved_cv.uploaded_at,
         )
 
 
@@ -148,6 +149,7 @@ class ListUserCVsUseCase:
                     original_filename=cv.original_filename,
                     size_bytes=cv.size_bytes,
                     download_url=url,
+                    uploaded_at=cv.uploaded_at,
                 )
             )
 

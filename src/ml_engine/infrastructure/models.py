@@ -44,6 +44,7 @@ class SkillModel(Base):
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain: Mapped[str | None] = mapped_column(String(50), nullable=True)
     weight: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="1.0")
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

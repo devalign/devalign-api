@@ -11,7 +11,6 @@ from src.config import settings
 
 # Module routers
 from src.delivery.interface.router import router as delivery_router
-from src.genai.interface.router import router as genai_router
 from src.ml_engine.interface.router import router as ml_router
 from src.scraper.interface.router import router as scraper_router
 from src.shared.database import engine
@@ -65,7 +64,6 @@ def create_app() -> FastAPI:
     # === Routers ===
     app.include_router(delivery_router, prefix=settings.API_V1_PREFIX)
     app.include_router(ml_router, prefix=settings.API_V1_PREFIX)
-    app.include_router(genai_router, prefix=settings.API_V1_PREFIX)
     app.include_router(scraper_router, prefix=settings.API_V1_PREFIX)
 
     # === Health check ===

@@ -19,7 +19,6 @@ from src.config import settings
 
 # Import all models so Alembic discovers them for autogenerate
 from src.delivery.infrastructure.models import CVDocumentModel, UserModel  # noqa: F401
-from src.genai.infrastructure.models import RoadmapModel  # noqa: F401
 from src.ml_engine.infrastructure.models import (  # noqa: F401
     ClusterModel,
     ClusterSkillModel,

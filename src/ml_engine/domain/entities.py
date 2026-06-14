@@ -32,6 +32,7 @@ class Skill:
     weight: float = 1.0
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     domain: str | None = None
+    embedding: list[float] | None = None
     id: UUID | None = None
 
 

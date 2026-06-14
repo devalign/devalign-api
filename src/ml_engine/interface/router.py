@@ -6,7 +6,6 @@ from uuid import UUID
 from fastapi import APIRouter, File, UploadFile
 
 from src.dependencies import SessionDep
-from src.genai.infrastructure.langchain_chain import get_llm_service
 from src.ml_engine.application.dtos import (
     ClusterDTO,
     ProfileUpdateDTO,
@@ -17,7 +16,7 @@ from src.ml_engine.application.use_cases import ListClustersUseCase, ProfileUser
 from src.ml_engine.domain.entities import UserProfile
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
-from src.ml_engine.infrastructure.embeddings import get_embedding_service
+from src.ml_engine.infrastructure.llm_client import get_llm_service
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
 from src.shared.security import CurrentUserIdDep
 
@@ -56,7 +55,6 @@ async def analyze_cv(
 
     use_case = ProfileUserFromCVUseCase(
         cv_parser=LocalCVParserService(),
-        embedding_service=get_embedding_service(),
         cluster_repository=SQLClusterRepository(session),
         profile_repository=SQLUserProfileRepository(session),
         llm_service=get_llm_service(),
@@ -97,6 +95,7 @@ async def normalize_skills(session: SessionDep) -> dict[str, Any]:
     3. Marks the processed offers as normalized.
     """
     from src.ml_engine.application.use_cases import NormalizeSkillsUseCase
+    from src.ml_engine.infrastructure.embeddings import get_embedding_service
     from src.ml_engine.infrastructure.job_offer_repository import SQLMLJobOfferRepository
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
 

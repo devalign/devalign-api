@@ -38,11 +38,6 @@ dependencies = [
     "python-docx>=1.1.2",
     "python-multipart>=0.0.12",
     # === LLM & RAG ===
-    "langchain>=0.3.0",
-    "langchain-community>=0.3.0",
-    "langchain-groq>=0.2.0",
-    "langchain-openai>=0.2.0",
-    "langchain-postgres>=0.0.12",
     # === HTTP Client ===
     "httpx>=0.27.0",
     "aiohttp>=3.11.0",
@@ -58,11 +53,6 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-local = [
-    # Local embedding model — only needed for development (EMBEDDING_PROVIDER=local).
-    # Pulls in PyTorch + CUDA (~2 GB). Excluded from production Docker builds.
-    "sentence-transformers>=5.5.0",
-]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -122,7 +112,7 @@ plugins = ["pydantic.mypy", "sqlalchemy.ext.mypy.plugin"]
 exclude = ["alembic/", "tests/"]
 
 [[tool.mypy.overrides]]
-module = ["kmodes.*", "pgvector.*", "langchain.*", "langchain_groq.*", "langchain_openai.*", "langchain_community.*", "langchain_postgres.*", "structlog.*"]
+module = ["kmodes.*", "pgvector.*", "structlog.*"]
 ignore_missing_imports = true
 
 # ============================================================

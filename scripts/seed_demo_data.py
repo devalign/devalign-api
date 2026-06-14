@@ -38,14 +38,24 @@ async def seed() -> None:
                 {"name": "Java", "category": "hard_skill", "weight": 3.0, "frequency": 0.92},
                 {"name": "Spring Boot", "category": "hard_skill", "weight": 3.0, "frequency": 0.88},
                 {"name": "REST APIs", "category": "hard_skill", "weight": 2.0, "frequency": 0.80},
-                {"name": "Microservicios", "category": "hard_skill", "weight": 2.0, "frequency": 0.82},
+                {
+                    "name": "Microservicios",
+                    "category": "hard_skill",
+                    "weight": 2.0,
+                    "frequency": 0.82,
+                },
                 {"name": "PostgreSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.74},
                 {"name": "AWS", "category": "hard_skill", "weight": 2.0, "frequency": 0.62},
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.70},
                 {"name": "Kubernetes", "category": "tool", "weight": 2.0, "frequency": 0.55},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.90},
                 {"name": "Liderazgo", "category": "soft_skill", "weight": 1.0, "frequency": 0.85},
-                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.80},
+                {
+                    "name": "Comunicación",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.80,
+                },
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.82},
             ],
         },
@@ -63,8 +73,18 @@ async def seed() -> None:
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.75},
                 {"name": "Redis", "category": "hard_skill", "weight": 1.5, "frequency": 0.55},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92},
-                {"name": "Trabajo en equipo", "category": "soft_skill", "weight": 1.0, "frequency": 0.88},
-                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.90},
+                {
+                    "name": "Trabajo en equipo",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.88,
+                },
+                {
+                    "name": "Resolución de problemas",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.90,
+                },
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80},
             ],
         },
@@ -81,8 +101,18 @@ async def seed() -> None:
                 {"name": "CSS3", "category": "hard_skill", "weight": 2.0, "frequency": 0.90},
                 {"name": "Tailwind CSS", "category": "tool", "weight": 1.5, "frequency": 0.82},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92},
-                {"name": "Adaptabilidad", "category": "soft_skill", "weight": 1.0, "frequency": 0.85},
-                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.88},
+                {
+                    "name": "Adaptabilidad",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.85,
+                },
+                {
+                    "name": "Comunicación",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.88,
+                },
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.85},
             ],
         },
@@ -100,7 +130,12 @@ async def seed() -> None:
                 {"name": "Prometheus", "category": "tool", "weight": 2.0, "frequency": 0.65},
                 {"name": "Grafana", "category": "tool", "weight": 2.0, "frequency": 0.68},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.95},
-                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.92},
+                {
+                    "name": "Resolución de problemas",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.92,
+                },
                 {"name": "Agile", "category": "methodology", "weight": 1.0, "frequency": 0.80},
             ],
         },
@@ -118,7 +153,12 @@ async def seed() -> None:
                 {"name": "Snowflake", "category": "tool", "weight": 2.5, "frequency": 0.65},
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.60},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.85},
-                {"name": "Pensamiento crítico", "category": "soft_skill", "weight": 1.0, "frequency": 0.88},
+                {
+                    "name": "Pensamiento crítico",
+                    "category": "soft_skill",
+                    "weight": 1.0,
+                    "frequency": 0.88,
+                },
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80},
             ],
         },
@@ -126,6 +166,7 @@ async def seed() -> None:
 
     try:
         from sqlalchemy import delete, select
+
         from src.ml_engine.infrastructure.models import DiagnosticModel, DiagnosticSkillModel
 
         # Clean diagnostics to avoid foreign key constraint violations

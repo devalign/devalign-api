@@ -1,13 +1,11 @@
 """ML Engine use cases."""
 
 import json
-import math
 from typing import Any
 from uuid import UUID
 
 import structlog
 
-from src.genai.domain.ports import LLMService
 from src.ml_engine.application.dtos import (
     ClusterAffinityDTO,
     ClusterDTO,
@@ -28,6 +26,7 @@ from src.ml_engine.domain.ports import (
     ClusterRepository,
     CVParserService,
     EmbeddingService,
+    LLMService,
     MLJobOfferRepository,
     SkillRepository,
     UserProfileRepository,
@@ -55,14 +54,12 @@ class ProfileUserFromCVUseCase:
     def __init__(
         self,
         cv_parser: CVParserService,
-        embedding_service: EmbeddingService,
         cluster_repository: ClusterRepository,
         profile_repository: UserProfileRepository,
         llm_service: LLMService,
         skill_repository: SkillRepository,
     ) -> None:
         self._cv_parser = cv_parser
-        self._embedder = embedding_service
         self._clusters = cluster_repository
         self._profiles = profile_repository
         self._llm = llm_service
@@ -210,13 +207,9 @@ class ProfileUserFromCVUseCase:
                     ],
                 }
 
-            # Step 3: Embed CV text (kept for backwards compatibility/fallback vector)
-            logger.info("Generating CV embedding")
-            try:
-                cv_embedding = await self._embedder.embed_text(cv_text)
-            except Exception as e:
-                logger.warning("Embedding CV text failed, using zero vector", error=str(e))
-                cv_embedding = [0.0] * 1024
+            # Step 3: Embed CV text (mocked as zero vector for schema backwards compatibility)
+            logger.info("Setting CV embedding to static zero vector")
+            cv_embedding = [0.0] * 1024
 
             # Step 4: Normalize user skills
             raw_skills = extracted_data.get("skills", {})
@@ -492,16 +485,6 @@ def _parse_cv_extraction_output(raw_output: str) -> dict[str, Any]:
         return {}
 
 
-def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    dot = sum(a * b for a, b in zip(v1, v2, strict=True))
-    norm1 = math.sqrt(sum(a**2 for a in v1))
-    norm2 = math.sqrt(sum(b**2 for b in v2))
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return dot / (norm1 * norm2)
-
-
 def _estimate_seniority(cv_text: str) -> SeniorityLevel:
     """Heuristic seniority estimation based on keyword presence in CV text."""
     text_lower = cv_text.lower()
@@ -520,8 +503,8 @@ class NormalizeSkillsUseCase:
     ML Pipeline step: Normalizes raw string skills from job_offers into
     canonical Skill entities, and links them via offer_skills.
 
-    Uses Word Embeddings (Cosine Similarity) to deduplicate skills
-    (e.g., "react.js" vs "React" vs "reactjs").
+    Uses Voyage/OpenAI embeddings to deduplicate skills semantically
+    and falls back to Fuzzy Matching (difflib) if embeddings are missing.
     """
 
     def __init__(
@@ -532,11 +515,14 @@ class NormalizeSkillsUseCase:
     ) -> None:
         self._job_offers = job_offer_repo
         self._skills = skill_repo
-        self._embedder = embedding_service
-        self.SIMILARITY_THRESHOLD = 0.88  # Tunable threshold
+        self._embeddings = embedding_service
 
     async def execute(self) -> dict[str, Any]:
         """Run the normalization pipeline for unnormalized job offers."""
+        import difflib
+
+        import numpy as np
+
         from src.ml_engine.domain.entities import Skill, SkillType
 
         logger.info("Starting Skill Normalization Pipeline")
@@ -547,27 +533,18 @@ class NormalizeSkillsUseCase:
             logger.info("No unnormalized offers found.")
             return {"processed_offers": 0, "new_skills": 0}
 
-        # 2. Fetch existing skills
+        # 2. Fetch existing skills from database
         existing_skills = await self._skills.get_all_skills()
         skill_map = {s.normalized_name: s for s in existing_skills}
 
-        # We also need embeddings for existing skills to do semantic matching
-        # In a real production system, you'd cache these embeddings.
-        # For this prototype, we'll embed the names of existing skills on the fly
-        # if the exact match fails.
-        existing_skill_names = [s.name for s in existing_skills]
-        if existing_skill_names:
-            existing_embeddings = await self._embedder.embed_batch(existing_skill_names)
-        else:
-            existing_embeddings = []
-
         new_skills_to_create: dict[str, Skill] = {}
-        offer_skills_to_insert = []
         processed_offer_ids = []
+
+        # Gather unique skills in this batch that are not exactly matched
+        unmapped_raw_skills: dict[str, str] = {}  # norm_name -> raw_name
 
         for offer in offers:
             processed_offer_ids.append(offer["id"])
-
             raw_skills = offer.get("raw_hard_skills", [])
 
             for raw_skill in raw_skills:
@@ -577,58 +554,105 @@ class NormalizeSkillsUseCase:
                 if not norm_name:
                     continue
 
-                matched_skill = None
+                # Exact match check against existing DB or already planned creations
+                if norm_name not in skill_map and norm_name not in new_skills_to_create:
+                    unmapped_raw_skills[norm_name] = clean_name
 
-                # 2.1 Exact match
-                if norm_name in skill_map:
-                    matched_skill = skill_map[norm_name]
-                elif norm_name in new_skills_to_create:
-                    matched_skill = new_skills_to_create[norm_name]
+        # If there are unmapped skills, generate embeddings in batch
+        unmapped_embeddings: dict[str, list[float]] = {}
+        if unmapped_raw_skills:
+            norm_names = list(unmapped_raw_skills.keys())
+            raw_names = [unmapped_raw_skills[k] for k in norm_names]
+            try:
+                logger.info(f"Generating embeddings for {len(raw_names)} unmapped skills.")
+                vectors = await self._embeddings.embed_batch(raw_names)
+                for norm_name, vector in zip(norm_names, vectors, strict=True):
+                    unmapped_embeddings[norm_name] = vector
+            except Exception as exc:
+                logger.error("Failed to generate embeddings in batch", error=str(exc))
+                # Fallback to fuzzy matching if embedding fails
+
+        # Process matching using embeddings / fuzzy matching
+        for norm_name, clean_name in unmapped_raw_skills.items():
+            matched_skill = None
+            skill_vector = unmapped_embeddings.get(norm_name)
+
+            # Check if it was mapped in this loop (to avoid duplicate processing within same batch)
+            if norm_name in new_skills_to_create or norm_name in skill_map:
+                continue
+            else:
+                # Semantic Match vs existing skills
+                best_match = None
+                best_score = -1.0
+
+                if skill_vector:
+                    # Search best match in existing skills that have embeddings
+                    for s in list(skill_map.values()) + list(new_skills_to_create.values()):
+                        if s.embedding is not None:
+                            # Cosine similarity
+                            a = np.array(skill_vector)
+                            b = np.array(s.embedding)
+                            norm_a = np.linalg.norm(a)
+                            norm_b = np.linalg.norm(b)
+                            if norm_a > 0 and norm_b > 0:
+                                sim = float(np.dot(a, b) / (norm_a * norm_b))
+                                if sim > best_score:
+                                    best_score = sim
+                                    best_match = s
+
+                # Threshold decision
+                if best_match and best_score >= 0.88:
+                    logger.info(
+                        f"Mapped '{clean_name}' semantically to canonical '{best_match.name}' (score: {best_score:.3f})"
+                    )
+                    # Map this alias to existing skill in local map for rest of batch
+                    skill_map[norm_name] = best_match
                 else:
-                    # 2.2 Semantic match (Cosine similarity)
-                    raw_emb = await self._embedder.embed_text(clean_name)
-                    best_score = 0.0
-                    best_idx = -1
-
-                    for i, ext_emb in enumerate(existing_embeddings):
-                        score = _cosine_similarity(raw_emb, ext_emb)
-                        if score > best_score:
-                            best_score = score
-                            best_idx = i
-
-                    if best_score >= self.SIMILARITY_THRESHOLD:
-                        matched_skill = existing_skills[best_idx]
+                    # Fallback: Fuzzy matching (difflib)
+                    all_keys = list(skill_map.keys()) + list(new_skills_to_create.keys())
+                    matches = difflib.get_close_matches(norm_name, all_keys, n=1, cutoff=0.85)
+                    if matches:
+                        matched_name = matches[0]
+                        if matched_name in skill_map:
+                            matched_skill = skill_map[matched_name]
+                        else:
+                            matched_skill = new_skills_to_create[matched_name]
+                        logger.info(
+                            f"Mapped '{clean_name}' via fuzzy matching to canonical '{matched_skill.name}'"
+                        )
+                        skill_map[norm_name] = matched_skill
                     else:
-                        # 2.3 Create new skill
+                        # Create new canonical skill
+                        logger.info(f"Creating new canonical skill: '{clean_name}'")
                         matched_skill = Skill(
                             name=clean_name,
                             skill_type=SkillType.HARD_SKILL,
                             normalized_name=norm_name,
+                            embedding=skill_vector,
                         )
                         new_skills_to_create[norm_name] = matched_skill
-                        # Update our local memory to match future raw skills in this batch
-                        existing_skills.append(matched_skill)
-                        existing_embeddings.append(raw_emb)
                         skill_map[norm_name] = matched_skill
 
-                # We don't have the UUID for the newly created skill yet.
-                # We will assign them after bulk inserting new skills.
-                offer_skills_to_insert.append(
-                    {
-                        "job_offer_id": offer["id"],
-                        "skill_norm_name": matched_skill.normalized_name,
-                        "skill_type": "hard_skill",
-                    }
-                )
+        # Re-iterate offers to build final link list
+        final_offer_skills_to_insert = []
+        for offer in offers:
+            raw_skills = offer.get("raw_hard_skills", [])
+            for raw_skill in raw_skills:
+                clean_name = raw_skill.strip()
+                norm_name = clean_name.lower().replace(" ", "").replace(".", "")
+                if norm_name in skill_map:
+                    final_offer_skills_to_insert.append(
+                        {
+                            "job_offer_id": offer["id"],
+                            "skill_norm_name": skill_map[norm_name].normalized_name,
+                            "skill_type": "hard_skill",
+                        }
+                    )
 
         # 3. Save new skills to database
         if new_skills_to_create:
-            logger.info(f"Creating {len(new_skills_to_create)} new canonical skills.")
+            logger.info(f"Creating {len(new_skills_to_create)} new canonical skills in DB.")
             await self._skills.save_skills(list(new_skills_to_create.values()))
-            # Update skill_map with the newly generated UUIDs (mocked as returning them)
-            # Since the actual ORM models get their IDs generated via default=uuid4,
-            # we need to make sure save_skills fetches them back.
-            # For simplicity, we just fetch all skills again
             all_skills = await self._skills.get_all_skills()
             skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, "id")}
         else:
@@ -637,7 +661,7 @@ class NormalizeSkillsUseCase:
 
         # 4. Insert offer_skills relations
         final_offer_skills = []
-        for os in offer_skills_to_insert:
+        for os in final_offer_skills_to_insert:
             skill_id = skill_id_map.get(os["skill_norm_name"])
             if skill_id:
                 final_offer_skills.append(
