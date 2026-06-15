@@ -152,3 +152,53 @@ async def list_cvs(
     """List all CVs uploaded by the current user."""
     use_case = _get_list_cvs_use_case(session)
     return await use_case.execute(UUID(current_user_id))
+
+
+@router.post(
+    "/me/cvs/{cv_id}/reanalyze",
+    response_model=CVUploadResultDTO,
+    summary="Re-analyze an existing CV",
+)
+async def reanalyze_cv(
+    cv_id: UUID,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+    background_tasks: BackgroundTasks,
+) -> CVUploadResultDTO:
+    """
+    Triggers background re-analysis of a CV that was previously uploaded.
+    This will overwrite the user's current profile with the details extracted from this CV.
+    """
+    from fastapi import HTTPException
+
+    cv_repo = SQLAlchemyCVRepository(session)
+    cv = await cv_repo.get_by_id(cv_id)
+    if not cv or str(cv.user_id) != current_user_id:
+        raise HTTPException(status_code=404, detail="CV not found")
+
+    storage_service = SupabaseStorageService(get_supabase_admin_client())
+    content = await storage_service.download_cv(cv.storage_path)
+
+    # Queue background task to run profile analysis
+    background_tasks.add_task(
+        run_profile_analysis_task,
+        user_id=cv.user_id,
+        cv_id=cv.id,
+        content=content,
+        content_type=cv.content_type,
+    )
+
+    try:
+        url = await storage_service.get_signed_url(cv.storage_path)
+    except Exception:
+        url = None
+
+    return CVUploadResultDTO(
+        cv_id=cv.id,
+        user_id=cv.user_id,
+        storage_path=cv.storage_path,
+        original_filename=cv.original_filename,
+        size_bytes=cv.size_bytes,
+        download_url=url,
+        uploaded_at=cv.uploaded_at,
+    )

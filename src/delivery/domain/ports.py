@@ -43,6 +43,11 @@ class CVRepository(ABC):
         """Get the most recent CV for a user."""
         ...
 
+    @abstractmethod
+    async def get_by_id(self, cv_id: UUID) -> CVDocument | None:
+        """Retrieve a CV by its ID."""
+        ...
+
 
 class StorageService(ABC):
     """Port for file storage operations."""
@@ -61,4 +66,9 @@ class StorageService(ABC):
     @abstractmethod
     async def get_signed_url(self, storage_path: str, expires_in: int = 3600) -> str:
         """Generate a signed URL for temporary file access."""
+        ...
+
+    @abstractmethod
+    async def download_cv(self, storage_path: str) -> bytes:
+        """Download CV file content from storage."""
         ...

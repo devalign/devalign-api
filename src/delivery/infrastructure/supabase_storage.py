@@ -5,7 +5,7 @@ import re
 import time
 import unicodedata
 import uuid
-from typing import ClassVar
+from typing import ClassVar, cast
 from uuid import UUID
 
 import structlog
@@ -92,3 +92,11 @@ class SupabaseStorageService(StorageService):
         except Exception as exc:
             logger.error("Failed to create signed URL", path=storage_path, error=str(exc))
             raise ExternalServiceError("Failed to generate download URL") from exc
+
+    async def download_cv(self, storage_path: str) -> bytes:
+        """Download CV file content from storage."""
+        try:
+            return cast("bytes", self._client.storage.from_(CV_BUCKET).download(storage_path))
+        except Exception as exc:
+            logger.error("Supabase storage download failed", path=storage_path, error=str(exc))
+            raise ExternalServiceError("Failed to download CV from storage") from exc

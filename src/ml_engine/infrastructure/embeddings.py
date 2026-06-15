@@ -49,7 +49,7 @@ class VoyageEmbeddingService(EmbeddingService):
                     )
                     raise ExternalServiceError("Voyage AI embedding service failed")
                 data = response.json()
-                return cast(list[float], data["data"][0]["embedding"])
+                return cast("list[float]", data["data"][0]["embedding"])
             except Exception as exc:
                 if isinstance(exc, ExternalServiceError):
                     raise exc
@@ -95,7 +95,9 @@ class VoyageEmbeddingService(EmbeddingService):
 class OpenAIEmbeddingService(EmbeddingService):
     """Embedding service using OpenAI Embeddings HTTP API."""
 
-    def __init__(self, api_key: str, model: str = "text-embedding-3-small", dimensions: int = 1024) -> None:
+    def __init__(
+        self, api_key: str, model: str = "text-embedding-3-small", dimensions: int = 1024
+    ) -> None:
         self._api_key = api_key
         self._model = model
         self._dimensions = dimensions
@@ -133,7 +135,7 @@ class OpenAIEmbeddingService(EmbeddingService):
                     )
                     raise ExternalServiceError("OpenAI embedding service failed")
                 data = response.json()
-                return cast(list[float], data["data"][0]["embedding"])
+                return cast("list[float]", data["data"][0]["embedding"])
             except Exception as exc:
                 if isinstance(exc, ExternalServiceError):
                     raise exc
@@ -184,6 +186,7 @@ def get_embedding_service() -> EmbeddingService:
     """Dependency provider factory for EmbeddingService."""
     if settings.EMBEDDING_PROVIDER == "openai":
         from src.ml_engine.infrastructure.models import EMBEDDING_DIM
+
         return OpenAIEmbeddingService(
             api_key=settings.OPENAI_API_KEY,
             model=settings.EMBEDDING_MODEL,

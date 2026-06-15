@@ -79,3 +79,10 @@ class SQLAlchemyCVRepository(CVRepository):
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def get_by_id(self, cv_id: UUID) -> CVDocument | None:
+        result = await self._session.execute(
+            select(CVDocumentModel).where(CVDocumentModel.id == cv_id)
+        )
+        model = result.scalar_one_or_none()
+        return model.to_entity() if model else None
