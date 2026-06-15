@@ -9,8 +9,8 @@ WORKDIR /app
 # Copy dependency files
 COPY pyproject.toml README.md ./
 
-# Install dependencies (no editable install, no dev extras, no local ML models)
-RUN uv sync --no-dev --no-editable --no-extra local
+# Install dependencies (no editable install, no dev extras)
+RUN uv sync --no-dev --no-editable
 
 # === Runtime stage ===
 FROM python:3.12-slim AS runtime
