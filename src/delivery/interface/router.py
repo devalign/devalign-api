@@ -6,6 +6,7 @@ from fastapi import APIRouter, BackgroundTasks, File, UploadFile
 
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
 from src.delivery.application.use_cases import (
+    DeleteCVUseCase,
     GetCurrentUserUseCase,
     ListUserCVsUseCase,
     UploadCVUseCase,
@@ -201,4 +202,32 @@ async def reanalyze_cv(
         size_bytes=cv.size_bytes,
         download_url=url,
         uploaded_at=cv.uploaded_at,
+    )
+
+
+def _get_delete_cv_use_case(session: SessionDep) -> DeleteCVUseCase:
+    return DeleteCVUseCase(
+        cv_repository=SQLAlchemyCVRepository(session),
+        storage_service=SupabaseStorageService(get_supabase_admin_client()),
+    )
+
+
+@router.delete(
+    "/me/cvs/{cv_id}",
+    status_code=204,
+    summary="Delete a CV from version history",
+)
+async def delete_cv(
+    cv_id: UUID,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> None:
+    """
+    Deletes a specific CV from the user's history.
+    If the CV is the active one, the user profile's active CV reference will be set to null.
+    """
+    use_case = _get_delete_cv_use_case(session)
+    await use_case.execute(
+        user_id=UUID(current_user_id),
+        cv_id=cv_id,
     )

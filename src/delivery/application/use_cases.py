@@ -8,7 +8,7 @@ import structlog
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
 from src.delivery.domain.entities import CVDocument, User
 from src.delivery.domain.ports import CVRepository, StorageService, UserRepository
-from src.shared.exceptions import FileTooLargeError, UnsupportedFileTypeError
+from src.shared.exceptions import AuthorizationError, FileTooLargeError, NotFoundError, UnsupportedFileTypeError
 
 logger = structlog.get_logger(__name__)
 
@@ -97,6 +97,22 @@ class UploadCVUseCase:
             content_type=content_type,
         )
 
+        # Enforce history limit (max 5 CVs)
+        existing_cvs = await self._cvs.get_by_user_id(user_id)
+        if len(existing_cvs) >= 5:
+            # Delete the oldest CVs so we make room for the new one (keep at most 4 existing CVs)
+            cvs_to_delete = existing_cvs[4:]
+            for old_cv in cvs_to_delete:
+                try:
+                    await self._storage.delete_cv(old_cv.storage_path)
+                except Exception as exc:
+                    logger.error(
+                        "Failed to delete old CV from storage during upload pruning",
+                        storage_path=old_cv.storage_path,
+                        error=str(exc),
+                    )
+                await self._cvs.delete(old_cv.id)
+
         # Persist metadata
         cv = CVDocument(
             id=uuid4(),
@@ -132,7 +148,7 @@ class ListUserCVsUseCase:
         self._storage = storage_service
 
     async def execute(self, user_id: UUID) -> CVListDTO:
-        cv_docs = await self._cvs.get_by_user_id(user_id)
+        cv_docs = await self._cvs.get_by_user_id(user_id, limit=5)
 
         cv_results = []
         for cv in cv_docs:
@@ -154,3 +170,25 @@ class ListUserCVsUseCase:
             )
 
         return CVListDTO(user_id=user_id, cvs=cv_results, total=len(cv_results))
+
+
+class DeleteCVUseCase:
+    """Delete a CV document from storage and database."""
+
+    def __init__(self, cv_repository: CVRepository, storage_service: StorageService) -> None:
+        self._cvs = cv_repository
+        self._storage = storage_service
+
+    async def execute(self, user_id: UUID, cv_id: UUID) -> None:
+        cv = await self._cvs.get_by_id(cv_id)
+        if not cv:
+            raise NotFoundError("CV not found")
+
+        if cv.user_id != user_id:
+            raise AuthorizationError("You do not have permission to delete this CV")
+
+        # Delete from storage first
+        await self._storage.delete_cv(cv.storage_path)
+
+        # Delete from database (also clears profile references)
+        await self._cvs.delete(cv.id)

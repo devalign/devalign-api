@@ -100,3 +100,13 @@ class SupabaseStorageService(StorageService):
         except Exception as exc:
             logger.error("Supabase storage download failed", path=storage_path, error=str(exc))
             raise ExternalServiceError("Failed to download CV from storage") from exc
+
+    async def delete_cv(self, storage_path: str) -> None:
+        """Delete CV file from storage and clear cached URL if exists."""
+        try:
+            self._client.storage.from_(CV_BUCKET).remove([storage_path])
+            self._url_cache.pop(storage_path, None)
+            logger.info("CV deleted from storage", path=storage_path)
+        except Exception as exc:
+            logger.error("Supabase storage removal failed", path=storage_path, error=str(exc))
+            raise ExternalServiceError("Failed to delete CV from storage") from exc

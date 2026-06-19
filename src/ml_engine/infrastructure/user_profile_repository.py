@@ -161,7 +161,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         if not diagnostic_model:
             return UserProfile(
                 user_id=profile_model.user_id,
-                cv_id=profile_model.cv_id or uuid4(),
+                cv_id=profile_model.cv_id,
                 embedding=[],
                 detected_skills=[],
                 seniority=SeniorityLevel.JUNIOR,
@@ -229,7 +229,7 @@ class SQLUserProfileRepository(UserProfileRepository):
 
         return UserProfile(
             user_id=profile_model.user_id,
-            cv_id=profile_model.cv_id or uuid4(),
+            cv_id=profile_model.cv_id,
             embedding=list(profile_model.cv_embedding)
             if profile_model.cv_embedding is not None
             else [],

@@ -34,8 +34,8 @@ class CVRepository(ABC):
         ...
 
     @abstractmethod
-    async def get_by_user_id(self, user_id: UUID) -> list[CVDocument]:
-        """Get all CVs uploaded by a user."""
+    async def get_by_user_id(self, user_id: UUID, limit: int | None = None) -> list[CVDocument]:
+        """Get CVs uploaded by a user, optionally limited."""
         ...
 
     @abstractmethod
@@ -46,6 +46,11 @@ class CVRepository(ABC):
     @abstractmethod
     async def get_by_id(self, cv_id: UUID) -> CVDocument | None:
         """Retrieve a CV by its ID."""
+        ...
+
+    @abstractmethod
+    async def delete(self, cv_id: UUID) -> None:
+        """Delete a CV document record."""
         ...
 
 
@@ -71,4 +76,9 @@ class StorageService(ABC):
     @abstractmethod
     async def download_cv(self, storage_path: str) -> bytes:
         """Download CV file content from storage."""
+        ...
+
+    @abstractmethod
+    async def delete_cv(self, storage_path: str) -> None:
+        """Delete a CV file from storage."""
         ...

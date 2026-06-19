@@ -39,7 +39,7 @@ class UserProfileDTO(BaseModel):
     """User profile result returned after CV analysis."""
 
     user_id: UUID
-    cv_id: UUID
+    cv_id: UUID | None = None
     seniority: str
     primary_specialty: str
     alignment_score: float = Field(ge=0.0, le=1.0)

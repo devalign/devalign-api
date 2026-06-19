@@ -1,0 +1,21 @@
+name: Trigger ML Normalization
+
+on:
+  repository_dispatch:
+    types: [scraping_finished]
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Call ML Normalization Endpoint
+        run: |
+          if [ -z "${{ secrets.DEVALIGN_API_URL }}" ]; then
+            echo "Error: DEVALIGN_API_URL secret is not set."
+            exit 1
+          fi
+          curl -X POST \
+               -H "Content-Type: application/json" \
+               -d '{}' \
+               "${{ secrets.DEVALIGN_API_URL }}/api/v1/profile/normalize-skills"

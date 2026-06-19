@@ -76,7 +76,7 @@ class UserProfile:
     """The computed profile of a developer based on their CV."""
 
     user_id: UUID
-    cv_id: UUID
+    cv_id: UUID | None
     embedding: list[float]  # Vector representation of CV
     detected_skills: list[Skill]
     seniority: SeniorityLevel

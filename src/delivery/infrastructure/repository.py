@@ -62,12 +62,15 @@ class SQLAlchemyCVRepository(CVRepository):
         await self._session.flush()
         return model.to_entity()
 
-    async def get_by_user_id(self, user_id: UUID) -> list[CVDocument]:
-        result = await self._session.execute(
+    async def get_by_user_id(self, user_id: UUID, limit: int | None = None) -> list[CVDocument]:
+        stmt = (
             select(CVDocumentModel)
             .where(CVDocumentModel.user_id == user_id)
             .order_by(CVDocumentModel.uploaded_at.desc())
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        result = await self._session.execute(stmt)
         return [row.to_entity() for row in result.scalars().all()]
 
     async def get_latest_by_user_id(self, user_id: UUID) -> CVDocument | None:
@@ -86,3 +89,20 @@ class SQLAlchemyCVRepository(CVRepository):
         )
         model = result.scalar_one_or_none()
         return model.to_entity() if model else None
+
+    async def delete(self, cv_id: UUID) -> None:
+        # Clear any active CV references in user profiles
+        from src.ml_engine.infrastructure.models import ProfileModel
+        await self._session.execute(
+            update(ProfileModel)
+            .where(ProfileModel.cv_id == cv_id)
+            .values(cv_id=None)
+        )
+
+        result = await self._session.execute(
+            select(CVDocumentModel).where(CVDocumentModel.id == cv_id)
+        )
+        model = result.scalar_one_or_none()
+        if model:
+            await self._session.delete(model)
+            await self._session.flush()
