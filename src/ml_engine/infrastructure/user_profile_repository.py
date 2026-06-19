@@ -11,7 +11,7 @@ from src.ml_engine.domain.entities import (
     SeniorityLevel,
     Skill,
     SkillGap,
-    SkillType,
+    SkillNature,
     UserProfile,
 )
 from src.ml_engine.domain.ports import UserProfileRepository
@@ -85,23 +85,28 @@ class SQLUserProfileRepository(UserProfileRepository):
             norm_name = skill_name.lower()
             if norm_name not in db_skills:
                 # Find the skill in profile.detected_skills or profile.skill_gaps to get the correct properties
+                nature = SkillNature.TECH.value
                 weight = 1.0
+                domain_tags = []
                 for s in profile.detected_skills:
                     if s.name == skill_name:
-                        category = s.skill_type.value
+                        nature = s.nature.value
                         weight = s.weight
+                        domain_tags = s.domain_tags
                         break
                 for g in profile.skill_gaps:
                     if g.skill.name == skill_name:
-                        category = g.skill.skill_type.value
+                        nature = g.skill.nature.value
                         weight = g.skill.weight
+                        domain_tags = g.skill.domain_tags
                         break
 
                 new_skill_model = SkillModel(
                     skill_id=uuid4(),
                     name=skill_name,
-                    category=category,
+                    nature=nature,
                     weight=weight,
+                    domain_tags=domain_tags,
                 )
                 self._session.add(new_skill_model)
                 db_skills[norm_name] = new_skill_model
@@ -193,12 +198,13 @@ class SQLUserProfileRepository(UserProfileRepository):
             skill_entity = Skill(
                 id=ds.skill.skill_id,
                 name=ds.skill.name,
-                skill_type=SkillType(ds.skill.category)
-                if ds.skill.category
-                else SkillType.HARD_SKILL,
+                nature=SkillNature(ds.skill.nature)
+                if ds.skill.nature
+                else SkillNature.TECH,
                 normalized_name=ds.skill.name.lower().replace(" ", "").replace(".", ""),
                 weight=float(ds.skill.weight),
                 frequency=float(ds.importance_score) if ds.importance_score is not None else 1.0,
+                domain_tags=ds.skill.domain_tags or [],
             )
             if ds.skill_status == "consolidated":
                 detected_skills.append(skill_entity)

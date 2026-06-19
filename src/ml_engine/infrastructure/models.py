@@ -40,9 +40,9 @@ class SkillModel(Base):
     skill_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Normalized skill name — lowercase, canonical form (e.g. "react.js", "kubernetes")
     name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
-    # "hard_skill" | "soft_skill" | "methodology" | "tool"
-    category: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    domain: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # "concept" | "tech" | "soft"
+    nature: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    domain_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     weight: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="1.0")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -55,6 +55,74 @@ class SkillModel(Base):
     )
     diagnostic_skills: Mapped[list[DiagnosticSkillModel]] = relationship(
         "DiagnosticSkillModel", back_populates="skill", lazy="select"
+    )
+    aliases: Mapped[list[SkillAliasModel]] = relationship(
+        "SkillAliasModel", back_populates="skill", lazy="select", cascade="all, delete-orphan"
+    )
+    outgoing_relations: Mapped[list[SkillRelationModel]] = relationship(
+        "SkillRelationModel",
+        foreign_keys="[SkillRelationModel.source_skill_id]",
+        back_populates="source_skill",
+        lazy="select",
+        cascade="all, delete-orphan"
+    )
+    incoming_relations: Mapped[list[SkillRelationModel]] = relationship(
+        "SkillRelationModel",
+        foreign_keys="[SkillRelationModel.target_skill_id]",
+        back_populates="target_skill",
+        lazy="select",
+        cascade="all, delete-orphan"
+    )
+
+
+class SkillAliasModel(Base):
+    """ORM model for the skill_aliases table.
+
+    Maps raw variants (e.g. "react.js", "reactjs") to a canonical skill.
+    """
+
+    __tablename__ = "skill_aliases"
+
+    alias_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    alias_name: Mapped[str] = mapped_column(String(150), nullable=False, unique=True, index=True)
+    skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Relationships
+    skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="aliases")
+
+
+class SkillRelationModel(Base):
+    """ORM model for the skill_relations table (Knowledge Graph edges)."""
+
+    __tablename__ = "skill_relations"
+
+    relation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    target_skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # e.g., "requires", "alternative_to", "belongs_to"
+    relation_type: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # Relationships
+    source_skill: Mapped[SkillModel] = relationship(
+        "SkillModel", foreign_keys=[source_skill_id], back_populates="outgoing_relations"
+    )
+    target_skill: Mapped[SkillModel] = relationship(
+        "SkillModel", foreign_keys=[target_skill_id], back_populates="incoming_relations"
     )
 
 

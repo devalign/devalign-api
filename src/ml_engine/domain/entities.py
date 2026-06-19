@@ -15,11 +15,29 @@ class SeniorityLevel(StrEnum):
     STAFF = "staff"  # SFIA level 6+
 
 
-class SkillType(StrEnum):
-    HARD_SKILL = "hard_skill"
-    SOFT_SKILL = "soft_skill"
-    METHODOLOGY = "methodology"
-    TOOL = "tool"
+class SkillNature(StrEnum):
+    """The fundamental nature of a skill."""
+
+    CONCEPT = "concept"
+    TECH = "tech"
+    SOFT = "soft"
+
+
+class SkillRelationType(StrEnum):
+    """Types of edges in the knowledge graph."""
+
+    REQUIRES = "requires"
+    ALTERNATIVE_TO = "alternative_to"
+    BELONGS_TO = "belongs_to"
+
+
+@dataclass(frozen=True)
+class SkillRelation:
+    """An edge between two skills in the knowledge graph."""
+
+    target_skill_id: UUID
+    target_skill_name: str
+    relation_type: SkillRelationType
 
 
 @dataclass(frozen=True)
@@ -27,11 +45,13 @@ class Skill:
     """A technical or soft skill extracted from job offers or CVs."""
 
     name: str
-    skill_type: SkillType
+    nature: SkillNature
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
+    domain_tags: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)
+    relations: list[SkillRelation] = field(default_factory=list)
     weight: float = 1.0
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
-    domain: str | None = None
     embedding: list[float] | None = None
     id: UUID | None = None
 
@@ -57,9 +77,10 @@ class ClusterAffinity:
     cluster_id: UUID
     cluster_name: str
     affinity_score: float  # Cosine similarity [0, 1]
-    is_primary: bool  # Highest score = primary specialty
-    market_insights: dict[str, Any] = field(default_factory=dict)
-    compatible_roles: list[dict[str, Any]] = field(default_factory=list)
+    is_primary: bool = False
+    market_insights: dict[str, Any] | None = None
+    compatible_roles: list[dict[str, Any]] | None = None
+    ai_insight: str | None = None
 
 
 @dataclass(frozen=True)

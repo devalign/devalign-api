@@ -13,12 +13,13 @@ from src.ml_engine.application.dtos import (
     SkillDTO,
     UserProfileDTO,
 )
+from src.ml_engine.application.skill_catalog_service import SkillCatalogService
 from src.ml_engine.domain.entities import (
     ClusterAffinity,
     SeniorityLevel,
     Skill,
     SkillGap,
-    SkillType,
+    SkillNature,
     TechCluster,
     UserProfile,
 )
@@ -58,86 +59,36 @@ class ProfileUserFromCVUseCase:
         profile_repository: UserProfileRepository,
         llm_service: LLMService,
         skill_repository: SkillRepository,
+        skill_catalog: SkillCatalogService | None = None,
     ) -> None:
         self._cv_parser = cv_parser
         self._clusters = cluster_repository
         self._profiles = profile_repository
         self._llm = llm_service
         self._skills = skill_repository
+        self._catalog = skill_catalog or SkillCatalogService(skill_repository, llm_service)
 
     async def _normalize_user_skills(
         self, raw_skills: dict[str, list[str]] | list[str] | Any
     ) -> list[Skill]:
-        import difflib
-
-        # Load all canonical skills
-        existing_skills = await self._skills.get_all_skills()
-        existing_skills_map = {s.normalized_name: s for s in existing_skills}
-
-        normalized_skills = []
-        new_skills_to_create = []
-
-        # Normalize inputs
+        # Flatten raw skills into a single list of strings
+        raw_strings = []
         if isinstance(raw_skills, list):
-            raw_skills_dict = {
-                "technical": raw_skills,
-                "soft": [],
-                "tools": [],
-                "methodologies": [],
-            }
+            for item in raw_skills:
+                if isinstance(item, str):
+                    raw_strings.append(item)
         elif isinstance(raw_skills, dict):
-            raw_skills_dict = raw_skills
-        else:
-            raw_skills_dict = {}
+            for val_list in raw_skills.values():
+                if isinstance(val_list, list):
+                    for item in val_list:
+                        if isinstance(item, str):
+                            raw_strings.append(item)
 
-        cat_mapping = {
-            "technical": SkillType.HARD_SKILL,
-            "soft": SkillType.SOFT_SKILL,
-            "tools": SkillType.TOOL,
-            "methodologies": SkillType.METHODOLOGY,
-        }
+        if not raw_strings:
+            return []
 
-        for category_key, skill_type in cat_mapping.items():
-            names = raw_skills_dict.get(category_key, [])
-            if not isinstance(names, list):
-                continue
-            for name in names:
-                if not isinstance(name, str):
-                    continue
-                clean_name = name.strip()
-                if not clean_name:
-                    continue
-                norm_name = clean_name.lower().replace(" ", "").replace(".", "")
-
-                if norm_name in existing_skills_map:
-                    normalized_skills.append(existing_skills_map[norm_name])
-                else:
-                    # Fuzzy match against existing skills
-                    matches = difflib.get_close_matches(
-                        norm_name, list(existing_skills_map.keys()), n=1, cutoff=0.85
-                    )
-                    if matches:
-                        normalized_skills.append(existing_skills_map[matches[0]])
-                    else:
-                        new_skill = Skill(
-                            name=clean_name,
-                            skill_type=skill_type,
-                            normalized_name=norm_name,
-                            weight=1.0,
-                            frequency=1.0,
-                        )
-                        new_skills_to_create.append(new_skill)
-
-        if new_skills_to_create:
-            # Dedup new skills to create by normalized name
-            unique_new_skills = {}
-            for ns in new_skills_to_create:
-                unique_new_skills[ns.normalized_name] = ns
-
-            saved_skills = await self._skills.save_skills(list(unique_new_skills.values()))
-            normalized_skills.extend(saved_skills)
-
-        return normalized_skills
+        # Delegate to the O(1) + LLM fallback service
+        return await self._catalog.resolve_skills(raw_strings)
 
     async def execute(
         self,
@@ -248,20 +199,19 @@ class ProfileUserFromCVUseCase:
             skill_gaps = []
 
             if primary_cluster:
-                user_hard_skills = [
-                    s
+                user_tech_skills = {
+                    s.normalized_name
                     for s in detected_skills
-                    if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
-                ]
-                user_hard_norms = {s.normalized_name: s for s in user_hard_skills}
+                    if s.nature == SkillNature.TECH
+                }
 
-                primary_cluster_hard_skills = [
+                primary_cluster_tech_skills = [
                     s
                     for s in primary_cluster.centroid_skills
-                    if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
+                    if s.nature == SkillNature.TECH
                 ]
-                for skill in primary_cluster_hard_skills:
-                    if skill.normalized_name not in user_hard_norms:
+                for skill in primary_cluster_tech_skills:
+                    if skill.normalized_name not in user_tech_skills:
                         priority = skill.weight * skill.frequency
                         if priority >= 2.0:
                             importance = "critical"
@@ -346,7 +296,7 @@ class ProfileUserFromCVUseCase:
                 detected_skills=[
                     SkillDTO(
                         name=s.name,
-                        skill_type=s.skill_type.value,
+                        skill_type=s.nature.value,
                         market_importance="consolidated",
                         market_demand_percentage=round(s.frequency * 100)
                         if s.frequency is not None
@@ -357,7 +307,7 @@ class ProfileUserFromCVUseCase:
                 skill_gaps=[
                     SkillDTO(
                         name=g.skill.name,
-                        skill_type=g.skill.skill_type.value,
+                        skill_type=g.skill.nature.value,
                         market_importance=g.market_importance,
                         market_demand_percentage=round(g.skill.frequency * 100)
                         if g.skill.frequency is not None
@@ -523,7 +473,7 @@ class NormalizeSkillsUseCase:
 
         import numpy as np
 
-        from src.ml_engine.domain.entities import Skill, SkillType
+        from src.ml_engine.domain.entities import Skill, SkillNature
 
         logger.info("Starting Skill Normalization Pipeline")
 
@@ -626,7 +576,7 @@ class NormalizeSkillsUseCase:
                         logger.info(f"Creating new canonical skill: '{clean_name}'")
                         matched_skill = Skill(
                             name=clean_name,
-                            skill_type=SkillType.HARD_SKILL,
+                            nature=SkillNature.TECH,
                             normalized_name=norm_name,
                             embedding=skill_vector,
                         )
@@ -694,48 +644,72 @@ def compute_affinities_and_domains(
 ) -> tuple[
     ClusterAffinity | None, list[ClusterAffinity], list[ClusterAffinity], list[DomainAffinityDTO]
 ]:
-    from src.ml_engine.domain.entities import SkillType
+    from src.ml_engine.domain.entities import SkillNature
 
-    user_hard_skills = [
-        s for s in detected_skills if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
-    ]
-    user_hard_norms = {s.normalized_name: s for s in user_hard_skills}
+    user_tech_skills = [s for s in detected_skills if s.nature == SkillNature.TECH]
+    user_tech_norms = {s.normalized_name: s for s in user_tech_skills}
 
     affinities = []
     for cluster in active_clusters:
-        cluster_hard_skills = [
-            s
-            for s in cluster.centroid_skills
-            if s.skill_type in (SkillType.HARD_SKILL, SkillType.TOOL)
-        ]
-        cluster_hard_norms = {s.normalized_name: s for s in cluster_hard_skills}
+        cluster_tech_skills = [s for s in cluster.centroid_skills if s.nature == SkillNature.TECH]
+        cluster_tech_norms = {s.normalized_name: s for s in cluster_tech_skills}
 
-        union_norms = set(cluster_hard_norms.keys()) | set(user_hard_norms.keys())
+        union_norms = set(cluster_tech_norms.keys()) | set(user_tech_norms.keys())
 
         numerator = 0.0
         denominator = 0.0
+        matched_skills = []
+        partial_matches = []
+        missing_skills = []
 
         for norm_name in union_norms:
             w = 1.0
-            if norm_name in cluster_hard_norms:
-                w = cluster_hard_norms[norm_name].weight
-            elif norm_name in user_hard_norms:
-                w = user_hard_norms[norm_name].weight
+            if norm_name in cluster_tech_norms:
+                w = cluster_tech_norms[norm_name].weight
+            elif norm_name in user_tech_norms:
+                w = user_tech_norms[norm_name].weight
 
-            in_user = norm_name in user_hard_norms
-            in_cluster = norm_name in cluster_hard_norms
+            in_user = norm_name in user_tech_norms
+            in_cluster = norm_name in cluster_tech_norms
+
+            f_s = cluster_tech_norms[norm_name].frequency if in_cluster else 1.0
 
             if in_user and in_cluster:
-                f_s = cluster_hard_norms[norm_name].frequency
                 numerator += w * f_s
                 denominator += w * f_s
+                matched_skills.append(cluster_tech_norms[norm_name].name)
             elif in_cluster:
-                f_s = cluster_hard_norms[norm_name].frequency
+                cluster_skill = cluster_tech_norms[norm_name]
+                cluster_domains = set(cluster_skill.domain_tags)
+
+                partial_match_score = 0.0
+                if cluster_domains:
+                    for u_skill in user_tech_skills:
+                        if set(u_skill.domain_tags) & cluster_domains:
+                            partial_match_score = 0.3  # Give 30% credit for shared domain
+                            partial_matches.append((cluster_skill.name, u_skill.name))
+                            break
+
+                if partial_match_score == 0.0:
+                    missing_skills.append(cluster_skill.name)
+
+                numerator += (w * f_s) * partial_match_score
                 denominator += w * f_s
             else:
                 denominator += w * 1.0
 
         score = (numerator / denominator) if denominator > 0.0 else 0.0
+
+        insight_parts = []
+        if matched_skills:
+            insight_parts.append(f"Dominas {len(matched_skills)} tecnologías clave (como {', '.join(matched_skills[:2])}).")
+        if partial_matches:
+            examples = [f"tienes {u} en lugar de {c}" for c, u in partial_matches[:2]]
+            insight_parts.append(f"Cubres áreas relacionadas ({'; '.join(examples)}).")
+        if missing_skills:
+            insight_parts.append(f"Para mejorar, considera aprender {', '.join(missing_skills[:2])}.")
+
+        ai_insight = " ".join(insight_parts) if insight_parts else "Afinidad calculada en base a tu perfil."
 
         affinities.append(
             ClusterAffinity(
@@ -745,6 +719,7 @@ def compute_affinities_and_domains(
                 is_primary=False,
                 market_insights=cluster.market_insights,
                 compatible_roles=cluster.compatible_roles,
+                ai_insight=ai_insight
             )
         )
 
@@ -760,16 +735,17 @@ def compute_affinities_and_domains(
         is_primary=True,
         market_insights=primary.market_insights,
         compatible_roles=primary.compatible_roles,
+        ai_insight=primary.ai_insight
     )
     secondaries = affinities[1:3]
 
     domain_scores = {}
     for s in detected_skills:
-        if s.domain:
-            d = s.domain
-            if d not in domain_scores:
-                domain_scores[d] = 0.0
-            domain_scores[d] += s.weight * s.frequency
+        if s.domain_tags:
+            for d in s.domain_tags:
+                if d not in domain_scores:
+                    domain_scores[d] = 0.0
+                domain_scores[d] += s.weight * s.frequency
 
     total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
     domain_affinities_dto = [
@@ -779,6 +755,101 @@ def compute_affinities_and_domains(
     domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
 
     return primary, secondaries, affinities, domain_affinities_dto
+
+
+class GetKnowledgeGraphUseCase:
+    """Builds a Knowledge Graph representation for frontend visualization."""
+
+    def __init__(
+        self,
+        skill_repository: SkillRepository,
+        profile_repository: UserProfileRepository,
+    ) -> None:
+        self._skills = skill_repository
+        self._profiles = profile_repository
+
+    async def execute(self, user_id: UUID | None = None) -> Any:
+        from src.ml_engine.application.dtos import GraphLinkDTO, GraphNodeDTO, GraphResponseDTO
+
+        # 1. Fetch all skills
+        all_skills = await self._skills.get_all_skills()
+
+        # 2. Get user's acquired skills and gaps if user_id is provided
+        user_acquired_names = set()
+        user_gap_names = set()
+
+        if user_id:
+            profile = await self._profiles.get_by_user_id(user_id)
+            if profile:
+                for s in profile.detected_skills:
+                    user_acquired_names.add(s.normalized_name)
+                for g in profile.skill_gaps:
+                    user_gap_names.add(g.skill.normalized_name)
+
+        # 3. Build Nodes
+        nodes = []
+        for s in all_skills:
+            status = "neutral"
+            if s.normalized_name in user_acquired_names:
+                status = "acquired"
+            elif s.normalized_name in user_gap_names:
+                status = "gap"
+
+            nodes.append(
+                GraphNodeDTO(
+                    id=s.normalized_name,
+                    label=s.name,
+                    group=s.nature.value if hasattr(s, 'nature') and s.nature else "tech",
+                    domains=s.domain_tags if hasattr(s, 'domain_tags') and s.domain_tags else [],
+                    status=status
+                )
+            )
+
+        # 4. Build Links
+        links = []
+        # Explicit links (relations)
+        # Note: Depending on whether relations are eager loaded, we might need to access them safely.
+        for s in all_skills:
+            if hasattr(s, 'relations') and s.relations:
+                for rel in s.relations:
+                    # Resolve target name
+                    target_skill = next((ts for ts in all_skills if ts.id == rel.target_skill_id), None)
+                    if target_skill:
+                        links.append(
+                            GraphLinkDTO(
+                                source=s.normalized_name,
+                                target=target_skill.normalized_name,
+                                value=2.0,
+                                type=f"explicit_{rel.relation_type}"
+                            )
+                        )
+
+        # Implicit links (shared domains)
+        # To avoid a dense O(N^2) graph, we only link skills that share a domain IF one is acquired and one is a gap
+        # Or we can link them if they are in the same domain. Let's create a lightweight domain-based linking.
+        domain_map: dict[str, list[str]] = {}
+        for s in all_skills:
+            if hasattr(s, 'domain_tags') and s.domain_tags:
+                for d in s.domain_tags:
+                    if d not in domain_map:
+                        domain_map[d] = []
+                    domain_map[d].append(s.normalized_name)
+
+        for skill_names in domain_map.values():
+            # For each domain, we can create a central node for the domain, or just fully connect them
+            # Let's fully connect them but with low value.
+            # To limit edges, let's just connect consecutive nodes in the domain
+            for i in range(len(skill_names) - 1):
+                links.append(
+                    GraphLinkDTO(
+                        source=skill_names[i],
+                        target=skill_names[i+1],
+                        value=0.5,
+                        type="implicit_domain"
+                    )
+                )
+
+        return GraphResponseDTO(nodes=nodes, links=links)
 
 
 class GetMyProfileUseCase:
@@ -838,7 +909,7 @@ class GetMyProfileUseCase:
             detected_skills=[
                 SkillDTO(
                     name=s.name,
-                    skill_type=s.skill_type.value,
+                    skill_type=s.nature.value,
                     market_importance="consolidated",
                     market_demand_percentage=round(s.frequency * 100)
                     if s.frequency is not None
@@ -849,7 +920,7 @@ class GetMyProfileUseCase:
             skill_gaps=[
                 SkillDTO(
                     name=g.skill.name,
-                    skill_type=g.skill.skill_type.value,
+                    skill_type=g.skill.nature.value,
                     market_importance=g.market_importance,
                     market_demand_percentage=round(g.skill.frequency * 100)
                     if g.skill.frequency is not None

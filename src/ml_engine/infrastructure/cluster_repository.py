@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.ml_engine.domain.entities import Skill, SkillType, TechCluster
+from src.ml_engine.domain.entities import Skill, SkillNature, TechCluster
 from src.ml_engine.domain.ports import ClusterRepository
 from src.ml_engine.infrastructure.models import ClusterModel, ClusterSkillModel
 
@@ -47,15 +47,15 @@ class SQLClusterRepository(ClusterRepository):
                     Skill(
                         id=cs.skill.skill_id,
                         name=cs.skill.name,
-                        skill_type=SkillType(cs.skill.category)
-                        if cs.skill.category
-                        else SkillType.HARD_SKILL,
+                        nature=SkillNature(cs.skill.nature)
+                        if cs.skill.nature
+                        else SkillNature.TECH,
                         normalized_name=cs.skill.name.lower().replace(" ", "").replace(".", ""),
                         weight=float(cs.skill.weight),
                         frequency=float(cs.importance_score)
                         if cs.importance_score is not None
                         else 1.0,
-                        domain=cs.skill.domain,
+                        domain_tags=cs.skill.domain_tags or [],
                     )
                 )
 

@@ -8,7 +8,12 @@ import structlog
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
 from src.delivery.domain.entities import CVDocument, User
 from src.delivery.domain.ports import CVRepository, StorageService, UserRepository
-from src.shared.exceptions import AuthorizationError, FileTooLargeError, NotFoundError, UnsupportedFileTypeError
+from src.shared.exceptions import (
+    AuthorizationError,
+    FileTooLargeError,
+    NotFoundError,
+    UnsupportedFileTypeError,
+)
 
 logger = structlog.get_logger(__name__)
 

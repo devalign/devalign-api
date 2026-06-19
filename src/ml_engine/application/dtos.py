@@ -33,6 +33,7 @@ class ClusterAffinityDTO(BaseModel):
     is_primary: bool
     market_insights: dict[str, Any] | None = None
     compatible_roles: list[dict[str, Any]] | None = None
+    ai_insight: str | None = None
 
 
 class UserProfileDTO(BaseModel):
@@ -84,3 +85,23 @@ class ProfileUpdateDTO(BaseModel):
 
 class SkillsUpdateDTO(BaseModel):
     skills: list[SkillDTO]
+
+
+class GraphNodeDTO(BaseModel):
+    id: str
+    label: str
+    group: str
+    domains: list[str] = []
+    status: str = "neutral"  # "acquired", "gap", "neutral"
+
+
+class GraphLinkDTO(BaseModel):
+    source: str
+    target: str
+    value: float = 1.0
+    type: str = "implicit"  # "explicit_relation", "implicit_domain"
+
+
+class GraphResponseDTO(BaseModel):
+    nodes: list[GraphNodeDTO]
+    links: list[GraphLinkDTO]

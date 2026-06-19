@@ -209,7 +209,7 @@ async def update_my_skills(
 
     from fastapi import HTTPException
 
-    from src.ml_engine.domain.entities import Skill, SkillGap, SkillType
+    from src.ml_engine.domain.entities import Skill, SkillGap, SkillNature
 
     repo = SQLUserProfileRepository(session)
     profile = await repo.get_by_user_id(UUID(current_user_id))
@@ -219,9 +219,21 @@ async def update_my_skills(
     detected_skills = []
     skill_gaps = []
     for s in data.skills:
+        # Determine nature
+        nature_val = SkillNature.TECH
+        if s.skill_type:
+            try:
+                nature_val = SkillNature(s.skill_type)
+            except ValueError:
+                st_lower = s.skill_type.lower()
+                if "soft" in st_lower:
+                    nature_val = SkillNature.SOFT
+                elif "concept" in st_lower:
+                    nature_val = SkillNature.CONCEPT
+
         skill_entity = Skill(
             name=s.name,
-            skill_type=SkillType(s.skill_type) if s.skill_type else SkillType.HARD_SKILL,
+            nature=nature_val,
             normalized_name=s.name.lower().replace(" ", "").replace(".", ""),
         )
         if s.market_importance == "consolidated":
@@ -250,6 +262,33 @@ async def update_my_skills(
     return dto
 
 
+@router.get(
+    "/skills-graph",
+    summary="Get the knowledge graph of skills and their relations",
+)
+async def get_skills_graph(
+    session: SessionDep,
+    current_user_id: CurrentUserIdDep | None = None,
+) -> Any:
+    """
+    Returns the complete knowledge graph of skills, including explicit relationships
+    and implicit domain connections. If authenticated, highlights user's acquired skills and gaps.
+    """
+    from uuid import UUID
+
+    from src.ml_engine.application.use_cases import GetKnowledgeGraphUseCase
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
+    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
+
+    use_case = GetKnowledgeGraphUseCase(
+        skill_repository=SQLSkillRepository(session),
+        profile_repository=SQLUserProfileRepository(session)
+    )
+
+    uid = UUID(current_user_id) if current_user_id else None
+    return await use_case.execute(user_id=uid)
+
+
 def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:
     from src.ml_engine.application.dtos import ClusterAffinityDTO, SkillDTO
 
@@ -265,17 +304,18 @@ def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:
                 cluster_name=a.cluster_name,
                 affinity_score=a.affinity_score,
                 is_primary=False,
+                ai_insight=a.ai_insight
             )
             for a in profile.secondary_affinities
         ],
         detected_skills=[
-            SkillDTO(name=s.name, skill_type=s.skill_type.value, market_importance="consolidated")
+            SkillDTO(name=s.name, skill_type=s.nature.value, market_importance="consolidated")
             for s in profile.detected_skills
         ],
         skill_gaps=[
             SkillDTO(
                 name=g.skill.name,
-                skill_type=g.skill.skill_type.value,
+                skill_type=g.skill.nature.value,
                 market_importance=g.market_importance,
             )
             for g in profile.skill_gaps
