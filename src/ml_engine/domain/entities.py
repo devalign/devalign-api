@@ -81,6 +81,8 @@ class ClusterAffinity:
     market_insights: dict[str, Any] | None = None
     compatible_roles: list[dict[str, Any]] | None = None
     ai_insight: str | None = None
+    detected_skills: list[Skill] = field(default_factory=list)
+    skill_gaps: list[SkillGap] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

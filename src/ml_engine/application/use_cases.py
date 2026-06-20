@@ -278,6 +278,28 @@ class ProfileUserFromCVUseCase:
                         is_primary=False,
                         market_insights=a.market_insights,
                         compatible_roles=a.compatible_roles,
+                        detected_skills=[
+                            SkillDTO(
+                                name=s.name,
+                                skill_type=s.nature.value,
+                                market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                                market_demand_percentage=round(s.frequency * 100)
+                                if s.frequency is not None
+                                else 100,
+                            )
+                            for s in a.detected_skills
+                        ],
+                        skill_gaps=[
+                            SkillDTO(
+                                name=g.skill.name,
+                                skill_type=g.skill.nature.value,
+                                market_importance=g.market_importance,
+                                market_demand_percentage=round(g.skill.frequency * 100)
+                                if g.skill.frequency is not None
+                                else None,
+                            )
+                            for g in a.skill_gaps
+                        ],
                     )
                     for a in secondaries
                 ],
@@ -289,6 +311,28 @@ class ProfileUserFromCVUseCase:
                         is_primary=(a.cluster_id == primary.cluster_id),
                         market_insights=a.market_insights,
                         compatible_roles=a.compatible_roles,
+                        detected_skills=[
+                            SkillDTO(
+                                name=s.name,
+                                skill_type=s.nature.value,
+                                market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                                market_demand_percentage=round(s.frequency * 100)
+                                if s.frequency is not None
+                                else 100,
+                            )
+                            for s in a.detected_skills
+                        ],
+                        skill_gaps=[
+                            SkillDTO(
+                                name=g.skill.name,
+                                skill_type=g.skill.nature.value,
+                                market_importance=g.market_importance,
+                                market_demand_percentage=round(g.skill.frequency * 100)
+                                if g.skill.frequency is not None
+                                else None,
+                            )
+                            for g in a.skill_gaps
+                        ],
                     )
                     for a in affinities
                 ],
@@ -648,6 +692,7 @@ def compute_affinities_and_domains(
 
     user_tech_skills = [s for s in detected_skills if s.nature == SkillNature.TECH]
     user_tech_norms = {s.normalized_name: s for s in user_tech_skills}
+    user_all_norms = {s.normalized_name: s for s in detected_skills}
 
     affinities = []
     for cluster in active_clusters:
@@ -711,6 +756,37 @@ def compute_affinities_and_domains(
 
         ai_insight = " ".join(insight_parts) if insight_parts else "Afinidad calculada en base a tu perfil."
 
+        # Compute cluster strengths and gaps dynamically
+        cluster_detected_skills = []
+        cluster_skill_gaps = []
+        for skill in cluster.centroid_skills:
+            if skill.normalized_name in user_all_norms:
+                cluster_detected_skills.append(skill)
+            else:
+                priority = skill.weight * skill.frequency
+                if priority >= 2.0:
+                    importance = "critical"
+                elif priority >= 1.0:
+                    importance = "high"
+                else:
+                    importance = "medium"
+
+                cluster_skill_gaps.append(
+                    SkillGap(
+                        skill=skill,
+                        market_importance=importance,
+                    )
+                )
+
+        cluster_detected_skills.sort(
+            key=lambda s: (s.frequency if s.frequency is not None else 1.0, s.weight),
+            reverse=True,
+        )
+        cluster_skill_gaps.sort(
+            key=lambda g: g.skill.weight * g.skill.frequency,
+            reverse=True,
+        )
+
         affinities.append(
             ClusterAffinity(
                 cluster_id=cluster.id,
@@ -719,7 +795,9 @@ def compute_affinities_and_domains(
                 is_primary=False,
                 market_insights=cluster.market_insights,
                 compatible_roles=cluster.compatible_roles,
-                ai_insight=ai_insight
+                ai_insight=ai_insight,
+                detected_skills=cluster_detected_skills,
+                skill_gaps=cluster_skill_gaps,
             )
         )
 
@@ -735,7 +813,9 @@ def compute_affinities_and_domains(
         is_primary=True,
         market_insights=primary.market_insights,
         compatible_roles=primary.compatible_roles,
-        ai_insight=primary.ai_insight
+        ai_insight=primary.ai_insight,
+        detected_skills=primary.detected_skills,
+        skill_gaps=primary.skill_gaps,
     )
     secondaries = affinities[1:3]
 
@@ -891,6 +971,28 @@ class GetMyProfileUseCase:
                     is_primary=False,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
+                    detected_skills=[
+                        SkillDTO(
+                            name=s.name,
+                            skill_type=s.nature.value,
+                            market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                            market_demand_percentage=round(s.frequency * 100)
+                            if s.frequency is not None
+                            else 100,
+                        )
+                        for s in a.detected_skills
+                    ],
+                    skill_gaps=[
+                        SkillDTO(
+                            name=g.skill.name,
+                            skill_type=g.skill.nature.value,
+                            market_importance=g.market_importance,
+                            market_demand_percentage=round(g.skill.frequency * 100)
+                            if g.skill.frequency is not None
+                            else None,
+                        )
+                        for g in a.skill_gaps
+                    ],
                 )
                 for a in (secondaries if secondaries else [])
             ],
@@ -902,6 +1004,28 @@ class GetMyProfileUseCase:
                     is_primary=(primary and a.cluster_id == primary.cluster_id),
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
+                    detected_skills=[
+                        SkillDTO(
+                            name=s.name,
+                            skill_type=s.nature.value,
+                            market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                            market_demand_percentage=round(s.frequency * 100)
+                            if s.frequency is not None
+                            else 100,
+                        )
+                        for s in a.detected_skills
+                    ],
+                    skill_gaps=[
+                        SkillDTO(
+                            name=g.skill.name,
+                            skill_type=g.skill.nature.value,
+                            market_importance=g.market_importance,
+                            market_demand_percentage=round(g.skill.frequency * 100)
+                            if g.skill.frequency is not None
+                            else None,
+                        )
+                        for g in a.skill_gaps
+                    ],
                 )
                 for a in (all_affinities if all_affinities else [])
             ],

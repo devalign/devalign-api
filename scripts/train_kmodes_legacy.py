@@ -54,10 +54,23 @@ def generate_cluster_name(top_skills):
 
 
 def main():
+    logger.info("Fetching skills and aliases for on-the-fly normalization...")
+    skills_resp = supabase.table("skills").select("name, skill_aliases(alias_name)").execute()
+    
+    alias_to_canonical = {}
+    if skills_resp.data:
+        for s in skills_resp.data:
+            canonical = s["name"].strip()
+            alias_to_canonical[canonical.lower()] = canonical
+            for a in s.get("skill_aliases", []):
+                alias_to_canonical[a["alias_name"].lower().strip()] = canonical
+
     logger.info("Fetching job offers from Supabase...")
-    # Fetch job offers with skills AND job_title
+    # Fetch job offers with raw_hard_skills
     response = (
-        supabase.table("job_offers").select("job_offer_id, job_title, raw_hard_skills").execute()
+        supabase.table("job_offers")
+        .select("job_offer_id, job_title, raw_hard_skills")
+        .execute()
     )
     data = response.data
 
@@ -68,28 +81,44 @@ def main():
     logger.info(f"Loaded {len(data)} job offers.")
 
     # 1. Build the binary matrix
-    all_skills = set()
+    skill_counts = {}
     valid_offers = []
 
     for row in data:
-        skills = row.get("raw_hard_skills") or []
-        if skills:
-            # Clean and normalize names
-            clean_skills = [
-                s.strip().lower().replace(" ", "").replace(".", "") for s in skills if s.strip()
-            ]
-            if clean_skills:
-                all_skills.update(clean_skills)
-                valid_offers.append(
-                    {
-                        "id": row["job_offer_id"],
-                        "job_title": row.get("job_title", ""),
-                        "skills": clean_skills,
-                    }
-                )
+        raw_skills = row.get("raw_hard_skills") or []
+        offer_skills = set()
+        
+        for raw_s in raw_skills:
+            clean_s = raw_s.lower().strip()
+            if not clean_s:
+                continue
+                
+            # Use canonical name if alias exists, else use raw
+            if clean_s in alias_to_canonical:
+                offer_skills.add(alias_to_canonical[clean_s])
+            else:
+                offer_skills.add(clean_s.replace(" ", "").replace(".", ""))
+                    
+        if offer_skills:
+            valid_offers.append(
+                {
+                    "id": row["job_offer_id"],
+                    "job_title": row.get("job_title", ""),
+                    "skills": list(offer_skills),
+                }
+            )
+            for s in offer_skills:
+                skill_counts[s] = skill_counts.get(s, 0) + 1
 
-    all_skills = sorted(list(all_skills))
-    logger.info(f"Found {len(all_skills)} unique skills across offers.")
+    # Filter skills that appear in at least 5% of valid offers (noise reduction)
+    min_freq = max(1, int(len(valid_offers) * 0.05))
+    all_skills = sorted([s for s, count in skill_counts.items() if count >= min_freq])
+    
+    logger.info(f"Found {len(skill_counts)} unique canonical skills, reduced to {len(all_skills)} after 5% frequency filter.")
+
+    if not all_skills:
+        logger.error("No skills left after filtering.")
+        sys.exit(1)
 
     # Create DataFrame (Rows: Offers, Cols: Skills)
     matrix_data = []
@@ -123,6 +152,13 @@ def main():
     logger.info(f"Training final K-Modes model with K={optimal_k}...")
     km_final = KModes(n_clusters=optimal_k, init="Huang", n_init=10, verbose=0, random_state=42)
     clusters = km_final.fit_predict(X)
+
+    from sklearn.metrics import silhouette_score
+    try:
+        sil_score = silhouette_score(X, clusters, metric='jaccard')
+        logger.info(f"Silhouette Score (Jaccard): {sil_score:.4f}")
+    except Exception as e:
+        logger.error(f"Failed to calculate silhouette score: {e}")
 
     df["cluster_label"] = clusters
 

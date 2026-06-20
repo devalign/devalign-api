@@ -34,6 +34,8 @@ class ClusterAffinityDTO(BaseModel):
     market_insights: dict[str, Any] | None = None
     compatible_roles: list[dict[str, Any]] | None = None
     ai_insight: str | None = None
+    detected_skills: list[SkillDTO] = []
+    skill_gaps: list[SkillDTO] = []
 
 
 class UserProfileDTO(BaseModel):
