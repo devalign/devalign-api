@@ -18,7 +18,7 @@ from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
 from src.ml_engine.infrastructure.llm_client import get_llm_service
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
-from src.shared.security import CurrentUserIdDep
+from src.shared.security import CurrentUserIdDep, OptionalUserIdDep
 
 router = APIRouter(prefix="/profile", tags=["ML Engine — Profiling"])
 
@@ -268,7 +268,7 @@ async def update_my_skills(
 )
 async def get_skills_graph(
     session: SessionDep,
-    current_user_id: CurrentUserIdDep | None = None,
+    current_user_id: OptionalUserIdDep = None,
 ) -> Any:
     """
     Returns the complete knowledge graph of skills, including explicit relationships
@@ -282,7 +282,7 @@ async def get_skills_graph(
 
     use_case = GetKnowledgeGraphUseCase(
         skill_repository=SQLSkillRepository(session),
-        profile_repository=SQLUserProfileRepository(session)
+        profile_repository=SQLUserProfileRepository(session),
     )
 
     uid = UUID(current_user_id) if current_user_id else None
@@ -304,7 +304,7 @@ def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:
                 cluster_name=a.cluster_name,
                 affinity_score=a.affinity_score,
                 is_primary=False,
-                ai_insight=a.ai_insight
+                ai_insight=a.ai_insight,
             )
             for a in profile.secondary_affinities
         ],

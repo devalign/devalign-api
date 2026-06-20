@@ -93,10 +93,9 @@ class SQLAlchemyCVRepository(CVRepository):
     async def delete(self, cv_id: UUID) -> None:
         # Clear any active CV references in user profiles
         from src.ml_engine.infrastructure.models import ProfileModel
+
         await self._session.execute(
-            update(ProfileModel)
-            .where(ProfileModel.cv_id == cv_id)
-            .values(cv_id=None)
+            update(ProfileModel).where(ProfileModel.cv_id == cv_id).values(cv_id=None)
         )
 
         result = await self._session.execute(

@@ -64,14 +64,14 @@ class SkillModel(Base):
         foreign_keys="[SkillRelationModel.source_skill_id]",
         back_populates="source_skill",
         lazy="select",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
     )
     incoming_relations: Mapped[list[SkillRelationModel]] = relationship(
         "SkillRelationModel",
         foreign_keys="[SkillRelationModel.target_skill_id]",
         back_populates="target_skill",
         lazy="select",
-        cascade="all, delete-orphan"
+        cascade="all, delete-orphan",
     )
 
 
@@ -101,7 +101,9 @@ class SkillRelationModel(Base):
 
     __tablename__ = "skill_relations"
 
-    relation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    relation_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
     source_skill_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("skills.skill_id", ondelete="CASCADE"),

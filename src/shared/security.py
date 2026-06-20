@@ -57,6 +57,22 @@ async def get_current_user_id(
     return user_id
 
 
+async def get_optional_user_id(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
+) -> str | None:
+    """FastAPI dependency: extract and validate user ID from JWT if present, return None otherwise."""
+    if credentials is None:
+        return None
+    try:
+        payload = decode_jwt_token(credentials.credentials)
+        user_id = payload.get("sub")
+        if isinstance(user_id, str) and user_id:
+            return user_id
+    except Exception:
+        pass
+    return None
+
+
 async def get_current_user_payload(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
 ) -> dict[str, object]:
@@ -74,3 +90,4 @@ async def get_current_user_payload(
 # Type aliases for cleaner dependency injection
 CurrentUserIdDep = Annotated[str, Depends(get_current_user_id)]
 CurrentUserPayloadDep = Annotated[dict[str, object], Depends(get_current_user_payload)]
+OptionalUserIdDep = Annotated[str | None, Depends(get_optional_user_id)]

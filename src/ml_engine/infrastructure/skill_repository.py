@@ -19,8 +19,7 @@ class SQLSkillRepository(SkillRepository):
         """Retrieve all canonical skills for similarity checking."""
         result = await self._session.execute(
             select(SkillModel).options(
-                selectinload(SkillModel.aliases),
-                selectinload(SkillModel.outgoing_relations)
+                selectinload(SkillModel.aliases), selectinload(SkillModel.outgoing_relations)
             )
         )
         models = result.scalars().all()
@@ -30,8 +29,8 @@ class SQLSkillRepository(SkillRepository):
             relations = [
                 SkillRelation(
                     target_skill_id=r.target_skill_id,
-                    target_skill_name="", # We'd need a join to get the name if required, or lazy load
-                    relation_type=SkillRelationType(r.relation_type)
+                    target_skill_name="",  # We'd need a join to get the name if required, or lazy load
+                    relation_type=SkillRelationType(r.relation_type),
                 )
                 for r in m.outgoing_relations
             ]
@@ -85,7 +84,7 @@ class SQLSkillRepository(SkillRepository):
                     normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
                     domain_tags=m.domain_tags if m.domain_tags else [],
                     aliases=[a.alias_name for a in m.aliases],
-                    relations=s.relations, # Keep original relations in memory
+                    relations=s.relations,  # Keep original relations in memory
                     weight=float(m.weight),
                     embedding=m.embedding,
                 )

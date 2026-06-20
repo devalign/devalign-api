@@ -198,9 +198,7 @@ class SQLUserProfileRepository(UserProfileRepository):
             skill_entity = Skill(
                 id=ds.skill.skill_id,
                 name=ds.skill.name,
-                nature=SkillNature(ds.skill.nature)
-                if ds.skill.nature
-                else SkillNature.TECH,
+                nature=SkillNature(ds.skill.nature) if ds.skill.nature else SkillNature.TECH,
                 normalized_name=ds.skill.name.lower().replace(" ", "").replace(".", ""),
                 weight=float(ds.skill.weight),
                 frequency=float(ds.importance_score) if ds.importance_score is not None else 1.0,

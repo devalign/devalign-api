@@ -200,15 +200,11 @@ class ProfileUserFromCVUseCase:
 
             if primary_cluster:
                 user_tech_skills = {
-                    s.normalized_name
-                    for s in detected_skills
-                    if s.nature == SkillNature.TECH
+                    s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
                 }
 
                 primary_cluster_tech_skills = [
-                    s
-                    for s in primary_cluster.centroid_skills
-                    if s.nature == SkillNature.TECH
+                    s for s in primary_cluster.centroid_skills if s.nature == SkillNature.TECH
                 ]
                 for skill in primary_cluster_tech_skills:
                     if skill.normalized_name not in user_tech_skills:
@@ -282,7 +278,17 @@ class ProfileUserFromCVUseCase:
                             SkillDTO(
                                 name=s.name,
                                 skill_type=s.nature.value,
-                                market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                                market_importance="critical"
+                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
+                                >= 2.0
+                                else (
+                                    "high"
+                                    if (
+                                        s.weight * (s.frequency if s.frequency is not None else 1.0)
+                                    )
+                                    >= 1.0
+                                    else "medium"
+                                ),
                                 market_demand_percentage=round(s.frequency * 100)
                                 if s.frequency is not None
                                 else 100,
@@ -315,7 +321,17 @@ class ProfileUserFromCVUseCase:
                             SkillDTO(
                                 name=s.name,
                                 skill_type=s.nature.value,
-                                market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                                market_importance="critical"
+                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
+                                >= 2.0
+                                else (
+                                    "high"
+                                    if (
+                                        s.weight * (s.frequency if s.frequency is not None else 1.0)
+                                    )
+                                    >= 1.0
+                                    else "medium"
+                                ),
                                 market_demand_percentage=round(s.frequency * 100)
                                 if s.frequency is not None
                                 else 100,
@@ -747,14 +763,20 @@ def compute_affinities_and_domains(
 
         insight_parts = []
         if matched_skills:
-            insight_parts.append(f"Dominas {len(matched_skills)} tecnologías clave (como {', '.join(matched_skills[:2])}).")
+            insight_parts.append(
+                f"Dominas {len(matched_skills)} tecnologías clave (como {', '.join(matched_skills[:2])})."
+            )
         if partial_matches:
             examples = [f"tienes {u} en lugar de {c}" for c, u in partial_matches[:2]]
             insight_parts.append(f"Cubres áreas relacionadas ({'; '.join(examples)}).")
         if missing_skills:
-            insight_parts.append(f"Para mejorar, considera aprender {', '.join(missing_skills[:2])}.")
+            insight_parts.append(
+                f"Para mejorar, considera aprender {', '.join(missing_skills[:2])}."
+            )
 
-        ai_insight = " ".join(insight_parts) if insight_parts else "Afinidad calculada en base a tu perfil."
+        ai_insight = (
+            " ".join(insight_parts) if insight_parts else "Afinidad calculada en base a tu perfil."
+        )
 
         # Compute cluster strengths and gaps dynamically
         cluster_detected_skills = []
@@ -879,9 +901,9 @@ class GetKnowledgeGraphUseCase:
                 GraphNodeDTO(
                     id=s.normalized_name,
                     label=s.name,
-                    group=s.nature.value if hasattr(s, 'nature') and s.nature else "tech",
-                    domains=s.domain_tags if hasattr(s, 'domain_tags') and s.domain_tags else [],
-                    status=status
+                    group=s.nature.value if hasattr(s, "nature") and s.nature else "tech",
+                    domains=s.domain_tags if hasattr(s, "domain_tags") and s.domain_tags else [],
+                    status=status,
                 )
             )
 
@@ -890,17 +912,19 @@ class GetKnowledgeGraphUseCase:
         # Explicit links (relations)
         # Note: Depending on whether relations are eager loaded, we might need to access them safely.
         for s in all_skills:
-            if hasattr(s, 'relations') and s.relations:
+            if hasattr(s, "relations") and s.relations:
                 for rel in s.relations:
                     # Resolve target name
-                    target_skill = next((ts for ts in all_skills if ts.id == rel.target_skill_id), None)
+                    target_skill = next(
+                        (ts for ts in all_skills if ts.id == rel.target_skill_id), None
+                    )
                     if target_skill:
                         links.append(
                             GraphLinkDTO(
                                 source=s.normalized_name,
                                 target=target_skill.normalized_name,
                                 value=2.0,
-                                type=f"explicit_{rel.relation_type}"
+                                type=f"explicit_{rel.relation_type}",
                             )
                         )
 
@@ -909,7 +933,7 @@ class GetKnowledgeGraphUseCase:
         # Or we can link them if they are in the same domain. Let's create a lightweight domain-based linking.
         domain_map: dict[str, list[str]] = {}
         for s in all_skills:
-            if hasattr(s, 'domain_tags') and s.domain_tags:
+            if hasattr(s, "domain_tags") and s.domain_tags:
                 for d in s.domain_tags:
                     if d not in domain_map:
                         domain_map[d] = []
@@ -923,9 +947,9 @@ class GetKnowledgeGraphUseCase:
                 links.append(
                     GraphLinkDTO(
                         source=skill_names[i],
-                        target=skill_names[i+1],
+                        target=skill_names[i + 1],
                         value=0.5,
-                        type="implicit_domain"
+                        type="implicit_domain",
                     )
                 )
 
@@ -975,7 +999,14 @@ class GetMyProfileUseCase:
                         SkillDTO(
                             name=s.name,
                             skill_type=s.nature.value,
-                            market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                            market_importance="critical"
+                            if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
+                            else (
+                                "high"
+                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
+                                >= 1.0
+                                else "medium"
+                            ),
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
@@ -1008,7 +1039,14 @@ class GetMyProfileUseCase:
                         SkillDTO(
                             name=s.name,
                             skill_type=s.nature.value,
-                            market_importance="critical" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0 else ("high" if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0 else "medium"),
+                            market_importance="critical"
+                            if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
+                            else (
+                                "high"
+                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
+                                >= 1.0
+                                else "medium"
+                            ),
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
