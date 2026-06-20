@@ -39,3 +39,7 @@ data/raw/
 
 # Alembic
 alembic/versions/*.pyc
+
+# Local scratch and debug files
+scratch/
+
