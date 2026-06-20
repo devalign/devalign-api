@@ -1,17 +1,17 @@
+import json
 import logging
 import os
 import sys
-import json
 from uuid import uuid4
 
-import pandas as pd
-import numpy as np
-import requests
-from dotenv import load_dotenv
-from supabase import create_client
-import umap
 import hdbscan
+import numpy as np
+import pandas as pd
+import requests
+import umap
+from dotenv import load_dotenv
 from sklearn.metrics import silhouette_score
+from supabase import create_client
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -85,7 +85,7 @@ def generate_cluster_names_batch(clusters_skills):
                         names_map[idx] = name
                     except ValueError:
                         pass
-            
+
             results = []
             for idx in range(len(clusters_skills)):
                 if idx in names_map:
@@ -129,17 +129,17 @@ def generate_cluster_name(top_skills):
 def main():
     logger.info("Fetching skills, embeddings, and aliases from Supabase...")
     skills_resp = supabase.table("skills").select("name, embedding, skill_aliases(alias_name)").execute()
-    
+
     alias_to_canonical = {}
     skill_to_embedding = {}
-    
+
     if skills_resp.data:
         for s in skills_resp.data:
             canonical = s["name"].strip()
             alias_to_canonical[canonical.lower()] = canonical
             for a in s.get("skill_aliases", []):
                 alias_to_canonical[a["alias_name"].lower().strip()] = canonical
-            
+
             emb_str = s.get("embedding")
             if emb_str:
                 try:
@@ -150,7 +150,7 @@ def main():
                             emb = [float(x) for x in emb_str.replace('[', '').replace(']', '').split(',') if x.strip()]
                     else:
                         emb = list(emb_str)
-                    
+
                     if len(emb) == 1024:
                         skill_to_embedding[canonical.lower()] = emb
                 except Exception as e:
@@ -184,24 +184,24 @@ def main():
     for row in offers:
         raw_skills = row.get("raw_hard_skills") or []
         offer_skills = set()
-        
+
         for raw_s in raw_skills:
             clean_s = raw_s.lower().strip()
             if not clean_s:
                 continue
-                
+
             if clean_s in alias_to_canonical:
                 offer_skills.add(alias_to_canonical[clean_s])
             else:
                 offer_skills.add(clean_s.replace(" ", "").replace(".", ""))
-                    
+
         # Find embeddings
         embeddings = []
         for s in offer_skills:
             emb = skill_to_embedding.get(s.lower())
             if emb:
                 embeddings.append(emb)
-                
+
         if embeddings:
             offer_vector = np.mean(embeddings, axis=0)
             valid_offers.append({
@@ -243,7 +243,7 @@ def main():
     noise_count = int(np.sum(labels == -1))
     noise_pct = (noise_count / len(labels)) * 100
 
-    logger.info(f"HDBSCAN clustering results:")
+    logger.info("HDBSCAN clustering results:")
     logger.info(f"- Total offers: {len(labels)}")
     logger.info(f"- Clusters found: {n_clusters}")
     logger.info(f"- Noise points: {noise_count} ({noise_pct:.2f}%)")
@@ -307,13 +307,13 @@ def main():
     for offer in valid_offers:
         for s in offer["skills"]:
             skill_counts[s] = skill_counts.get(s, 0) + 1
-            
+
     all_skills = sorted(list(skill_counts.keys()))
-    
+
     matrix_data = []
     for idx, offer in enumerate(valid_offers):
         row_dict = {
-            "offer_id": offer["id"], 
+            "offer_id": offer["id"],
             "job_title": offer["job_title"],
             "cluster_label": final_labels[idx]
         }
@@ -321,7 +321,7 @@ def main():
         for skill in all_skills:
             row_dict[skill] = 1 if skill in offer_skill_set else 0
         matrix_data.append(row_dict)
-        
+
     df = pd.DataFrame(matrix_data)
 
     # Process cluster results
