@@ -66,14 +66,14 @@ class Settings(BaseSettings):
     def set_env_based_defaults(cls, data: Any) -> Any:
         if isinstance(data, dict):
             app_env = data.get("APP_ENV", "development")
-            
+
             # If LLM_PROVIDER is not set or is empty, determine default based on APP_ENV
             if "LLM_PROVIDER" not in data or not data["LLM_PROVIDER"]:
                 if app_env == "production":
                     data["LLM_PROVIDER"] = "openai"
                 else:
                     data["LLM_PROVIDER"] = "groq"
-            
+
             # Set default model based on the selected or overridden provider
             prov = data.get("LLM_PROVIDER")
             if "LLM_MODEL" not in data or not data["LLM_MODEL"]:
