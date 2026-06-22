@@ -6,7 +6,7 @@
 
 Devalign analiza la demanda del mercado laboral (vía scraping offline) y los perfiles individuales de los desarrolladores (a través del análisis de CV) para:
 
-1. Identificar la especialidad técnica del desarrollador mediante agrupamiento en clústeres (UMAP + HDBSCAN).
+1. Identificar la especialidad técnica del desarrollador alineando su perfil con los clústeres de mercado calculados en el repositorio `devalign-ml`.
 2. Detectar brechas de habilidades comparándolas con el estándar de mercado para su especialidad usando la métrica Weighted Jaccard.
 3. Generar recomendaciones y planes de acción priorizados determinísticamente ($Prioridad = Peso \times Frecuencia$).
 
@@ -58,7 +58,7 @@ Diseño de arquitectura limpia con flujo de control: `domain → application →
 - **Supabase** (PostgreSQL + pgvector + Auth + Storage)
 - **Voyage AI** (Embeddings de 1024 dimensiones)
 - **OpenAI API / Claude API** (Extracción estructurada JSON)
-- **scikit-learn** + **umap-learn** + **hdbscan** (Clustering offline de vacantes)
+- **devalign-ml** (Repositorio de Machine Learning para clustering offline y análisis de especialidades)
 - **pypdf** + **python-docx** (Extracción de texto de CVs)
 - **SQLAlchemy 2.0** + **asyncpg** + **pgvector-python** (Persistencia y búsqueda vectorial asíncrona)
 - **Alembic** (Single Source of Truth para el esquema relacional en Postgres)

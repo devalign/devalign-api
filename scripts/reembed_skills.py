@@ -41,7 +41,7 @@ async def reembed_all() -> None:
                 batch = skills[i : i + batch_size]
                 names = [s.name for s in batch]
                 print(f"Embedding skill batch {i//batch_size + 1}: {names}")
-                
+
                 try:
                     vectors = await embedding_service.embed_batch(names)
                     for skill, vector in zip(batch, vectors, strict=True):
@@ -77,9 +77,9 @@ async def reembed_all() -> None:
                     raise e
 
         print("\nDatabase re-embedding completed successfully!")
-        print("IMPORTANT: Centroids for existing clusters are now out of sync. Please run:")
-        print("  python scripts/train_hdbscan.py")
-        print("to retrain clusters and calculate correct centroids in the new vector space.")
+        print("IMPORTANT: Centroids for existing clusters are now out of sync. Please run the")
+        print("clustering pipeline in the 'devalign-ml' repository to retrain clusters and")
+        print("calculate correct centroids in the new vector space.")
 
     except Exception as e:
         print(f"\nMigration failed: {e}")
