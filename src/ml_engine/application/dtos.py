@@ -24,6 +24,7 @@ class SkillDTO(BaseModel):
 class DomainAffinityDTO(BaseModel):
     domain: str
     affinity_score: float
+    market_demand: float = 0.5  # Relative market demand based on job postings
 
 
 class ClusterAffinityDTO(BaseModel):

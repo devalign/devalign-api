@@ -849,9 +849,28 @@ def compute_affinities_and_domains(
                     domain_scores[d] = 0.0
                 domain_scores[d] += s.weight * s.frequency
 
+    # Calcular promedios de demanda de mercado por dominio
+    domain_demands_accum: dict[str, list[float]] = {}
+    for cluster in active_clusters:
+        for skill in cluster.centroid_skills:
+            if skill.domain_tags:
+                for d in skill.domain_tags:
+                    d_clean = d.strip().lower()
+                    if d_clean not in domain_demands_accum:
+                        domain_demands_accum[d_clean] = []
+                    domain_demands_accum[d_clean].append(skill.frequency)
+
+    domain_market_demand = {
+        d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
+    }
+
     total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
     domain_affinities_dto = [
-        DomainAffinityDTO(domain=d, affinity_score=score / total_domain_score)
+        DomainAffinityDTO(
+            domain=d,
+            affinity_score=score / total_domain_score,
+            market_demand=domain_market_demand.get(d.strip().lower(), 0.5),
+        )
         for d, score in domain_scores.items()
     ]
     domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)

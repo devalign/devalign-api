@@ -1,9 +1,9 @@
 """Application configuration using pydantic-settings."""
 
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -52,7 +52,7 @@ class Settings(BaseSettings):
 
     # === LLM Configuration ===
     LLM_PROVIDER: Literal["groq", "openai"] = "groq"
-    LLM_MODEL: str = "llama-3.1-70b-versatile"
+    LLM_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_API_KEY: str = Field(default="", description="Groq API key")
     OPENAI_API_KEY: str = Field(default="", description="OpenAI API key")
     VOYAGE_API_KEY: str = Field(default="", description="Voyage AI API key")
@@ -60,6 +60,28 @@ class Settings(BaseSettings):
     # === Embeddings Configuration ===
     EMBEDDING_PROVIDER: Literal["openai", "voyage"] = "voyage"
     EMBEDDING_MODEL: str = "voyage-4-lite"
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_env_based_defaults(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            app_env = data.get("APP_ENV", "development")
+
+            # If LLM_PROVIDER is not set or is empty, determine default based on APP_ENV
+            if "LLM_PROVIDER" not in data or not data["LLM_PROVIDER"]:
+                if app_env == "production":
+                    data["LLM_PROVIDER"] = "openai"
+                else:
+                    data["LLM_PROVIDER"] = "groq"
+
+            # Set default model based on the selected or overridden provider
+            prov = data.get("LLM_PROVIDER")
+            if "LLM_MODEL" not in data or not data["LLM_MODEL"]:
+                if prov == "openai":
+                    data["LLM_MODEL"] = "gpt-4o-mini"
+                else:
+                    data["LLM_MODEL"] = "llama-3.3-70b-versatile"
+        return data
 
     # === Security ===
     SECRET_KEY: str = Field(

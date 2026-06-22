@@ -1,80 +1,79 @@
 # Devalign API
 
-> ML-powered API for tech skills gap analysis and personalized learning roadmap generation for Peruvian developers.
+> API con capacidades de Machine Learning para el análisis de brechas de habilidades técnicas y alineación profesional de desarrolladores en Perú.
 
 ## Overview
 
-Devalign analyzes job market demand (via scraping) and individual developer profiles (via CV analysis) to:
+Devalign analiza la demanda del mercado laboral (vía scraping offline) y los perfiles individuales de los desarrolladores (a través del análisis de CV) para:
 
-1. Identify a developer's primary technical specialty using ML clustering (K-Modes)
-2. Detect skill gaps against the market standard for that specialty
-3. Generate a personalized, standards-backed learning roadmap via LLM (Groq/OpenAI)
+1. Identificar la especialidad técnica del desarrollador alineando su perfil con los clústeres de mercado calculados en el repositorio `devalign-ml`.
+2. Detectar brechas de habilidades comparándolas con el estándar de mercado para su especialidad usando la métrica Weighted Jaccard.
+3. Generar recomendaciones y planes de acción priorizados determinísticamente ($Prioridad = Peso \times Frecuencia$).
 
 ## Quick Start
 
 ```bash
-# Requires: Python 3.12+ and uv
+# Requiere: Python 3.12+ y uv
+# Instalar uv si no está presente
 pip install uv
 
-# Install dependencies
+# Instalar dependencias del proyecto
 make install
 
-# Setup environment
+# Configurar variables de entorno
 cp .env.example .env
-# Edit .env with your Supabase, Groq/OpenAI, and Voyage AI credentials
+# Edite .env con sus credenciales de Supabase, OpenAI, y Voyage AI
 
-# Start development server
+# Iniciar servidor de desarrollo
 make dev
 # → http://localhost:8000/api/v1/docs
 ```
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/v1/users/me` | Current user profile |
-| POST | `/api/v1/users/me/cv` | Upload CV |
-| GET | `/api/v1/users/me/cvs` | List user CVs |
-| POST | `/api/v1/users/me/cvs/{cv_id}/reanalyze` | Re-analyze a CV |
-| DELETE | `/api/v1/users/me/cvs/{cv_id}` | Delete a CV |
-| POST | `/api/v1/profile/analyze` | Analyze CV → generate profile |
-| GET | `/api/v1/profile/me` | Get my analyzed profile |
-| PATCH | `/api/v1/profile/me` | Update my profile |
-| PUT | `/api/v1/profile/skills` | Update my skills |
-| GET | `/api/v1/profile/clusters` | List tech specialties |
-| POST | `/api/v1/profile/normalize-skills` | Normalize skill names |
-| GET | `/api/v1/scraper/status` | Scraper pipeline status |
+| Método | Endpoint | Descripción |
+|:---|:---|:---|
+| GET | `/health` | Verificación de estado de la API |
+| GET | `/api/v1/users/me` | Perfil del usuario autenticado (JIT Provisioning) |
+| POST | `/api/v1/users/me/cv` | Carga de CV en PDF/DOCX e inicio de procesamiento |
+| GET | `/api/v1/profile/me` | Obtención del JSON de Diagnóstico y brechas |
+| PUT | `/api/v1/profile/skills` | Actualización manual de habilidades del perfil |
+| GET | `/api/v1/profile/skills-graph` | Grafo de conocimiento de habilidades del usuario |
 
-## Architecture
+## Arquitectura
 
 ```
 src/
-├── delivery/       # Auth, users, CV upload & management
-├── ml_engine/      # CV parsing, embeddings (Voyage/OpenAI), clustering (K-Modes), LLM analysis
-├── scraper/        # Job offer acquisition (stub — external repo)
-└── shared/         # Database, logging, middleware, security
+├── delivery/       # Rutas HTTP, autenticación JWT, y controladores de entrada
+├── ml_engine/      # Extracción estructurada con LLM, embeddings (Voyage AI), normalización y alineación (Weighted Jaccard)
+├── scraper/        # Adquisición de ofertas de empleo (procesamiento offline)
+└── shared/         # Base de datos (SQLAlchemy/Alembic), configuración y utilidades
 ```
 
-Clean Architecture pattern: `domain → application → infrastructure → interface`
+Diseño de arquitectura limpia con flujo de control: `domain → application → infrastructure → interface`.
 
 ## Tech Stack
 
 - **FastAPI** + Pydantic v2 + pydantic-settings
 - **Supabase** (PostgreSQL + pgvector + Auth + Storage)
-- **Voyage AI / OpenAI** (embeddings via HTTP API)
-- **Groq / OpenAI** (LLM via HTTP API — no LangChain)
-- **scikit-learn** + **kmodes** (K-Modes clustering)
-- **pypdf** + **python-docx** (CV parsing)
-- **SQLAlchemy 2.0** (async) + **asyncpg** + **pgvector**
-- **structlog** (structured logging)
-- **tenacity** (retry logic)
-- **python-jose** (JWT decoding)
-- **uv** + Ruff + mypy + pytest
+- **Voyage AI** (Embeddings de 1024 dimensiones)
+- **OpenAI API / Claude API** (Extracción estructurada JSON)
+- **devalign-ml** (Repositorio de Machine Learning para clustering offline y análisis de especialidades)
+- **pypdf** + **python-docx** (Extracción de texto de CVs)
+- **SQLAlchemy 2.0** + **asyncpg** + **pgvector-python** (Persistencia y búsqueda vectorial asíncrona)
+- **Alembic** (Single Source of Truth para el esquema relacional en Postgres)
+- **uv** + Ruff + pytest
 
-## Documentation
+## Documentación del Proyecto
 
-- [Architecture](ARCHITECTURE.md)
-- [Stack](STACK.md)
-- [Decisions](DECISIONS.md)
-- [Progress](PROGRESS.md)
+La documentación de diseño, decisiones arquitectónicas, base de datos y contratos está centralizada en el repositorio de documentación central:
+
+- [🏗️ Arquitectura Técnica](../devalign-docs/ARCHITECTURE.md)
+- [🤝 Contratos de Interfaz](../devalign-docs/CONTRACTS.md)
+- [🗄️ Modelo de Base de Datos](../devalign-docs/DATABASE.md)
+- [🧠 Lógica Core e Inferencia](../devalign-docs/MODEL.md)
+- [🗺️ Roadmap de Producto](../devalign-docs/ROADMAP.md)
+- [🎯 Alcance MVP](../devalign-docs/SCOPE.md)
+- [📄 Documento de Requerimientos de Producto (PRD)](../devalign-docs/PRD.md)
+- [📋 Product Backlog](../devalign-docs/PRODUCT_BACKLOG.md)
+- [🏃 Sprint Backlog](../devalign-docs/SPRINT_BACKLOG.md)

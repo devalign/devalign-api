@@ -9,7 +9,6 @@ __pycache__/
 
 # uv
 .uv/
-uv.lock
 
 # Testing
 .pytest_cache/
@@ -39,3 +38,7 @@ data/raw/
 
 # Alembic
 alembic/versions/*.pyc
+
+# Local scratch and debug files
+scratch/
+
