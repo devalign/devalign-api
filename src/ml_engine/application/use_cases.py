@@ -1,6 +1,7 @@
 """ML Engine use cases."""
 
 import json
+from dataclasses import replace as dc_replace
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,7 @@ from src.ml_engine.domain.entities import (
     Skill,
     SkillGap,
     SkillNature,
+    SkillRelationType,
     TechCluster,
     UserProfile,
 )
@@ -89,6 +91,65 @@ class ProfileUserFromCVUseCase:
 
         # Delegate to the O(1) + LLM fallback service
         return await self._catalog.resolve_skills(raw_strings)
+
+    async def _expand_with_upward_inference(self, skills: list[Skill]) -> list[Skill]:
+        """Traverse upward-pointing relations in the skill graph to infer implicit parent skills.
+
+        Traversal rules:
+        - BELONGS_TO: child is a concrete implementation of parent (e.g. PostgreSQL → SQL).
+        - REQUIRES: child skill presupposes parent (e.g. Angular → JavaScript).
+
+        Both relation types indicate that mastery of the child implies working
+        knowledge of the parent.  Self-loops and already-visited nodes are
+        skipped to prevent cycles.
+
+        Args:
+            skills: The explicitly extracted skills from the candidate's CV.
+
+        Returns:
+            The original skills plus any inferred parent skills, deduplicated by ID.
+        """
+        if not skills:
+            return []
+
+        logger.info("Performing upward inference on detected skills", count=len(skills))
+        # Load the full graph in one round-trip (resolves names correctly)
+        skill_graph = await self._skills.get_skill_graph()
+
+        # Start with the explicitly detected skills, keyed by ID for O(1) dedup
+        inferred_skills: dict[UUID, Skill] = {s.id: s for s in skills if s.id}
+        to_process = [s for s in skills if s.id]
+
+        _upward_types = {SkillRelationType.BELONGS_TO, SkillRelationType.REQUIRES}
+
+        while to_process:
+            current_skill = to_process.pop(0)
+            full_skill = skill_graph.get(current_skill.id) if current_skill.id else None
+            if not full_skill:
+                continue
+
+            for relation in full_skill.relations:
+                if relation.relation_type not in _upward_types:
+                    continue
+                parent_id = relation.target_skill_id
+                if parent_id in skill_graph and parent_id not in inferred_skills:
+                    parent_skill = skill_graph[parent_id]
+                    # Stamp provenance: record which child triggered this inference.
+                    # Skill is frozen, so we use dataclasses.replace() for immutability.
+                    stamped_parent = dc_replace(
+                        parent_skill,
+                        inferred_from=[current_skill.name],
+                    )
+                    inferred_skills[parent_id] = stamped_parent
+                    to_process.append(stamped_parent)
+                    logger.debug(
+                        "Inferred parent skill",
+                        child=current_skill.name,
+                        parent=parent_skill.name,
+                        relation=relation.relation_type,
+                    )
+
+        return list(inferred_skills.values())
 
     async def execute(
         self,
@@ -165,6 +226,9 @@ class ProfileUserFromCVUseCase:
             # Step 4: Normalize user skills
             raw_skills = extracted_data.get("skills", {})
             detected_skills = await self._normalize_user_skills(raw_skills)
+
+            # Step 4b: Perform Upward Inference to detect implicit parent skills
+            detected_skills = await self._expand_with_upward_inference(detected_skills)
 
             # Step 5: Load active clusters
             clusters = await self._clusters.get_all_active()

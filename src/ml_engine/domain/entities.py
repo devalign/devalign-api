@@ -58,6 +58,10 @@ class Skill:
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     embedding: list[float] | None = None
     id: UUID | None = None
+    # Non-empty only for skills inferred via the knowledge graph.
+    # Contains the canonical names of child skills that triggered this inference
+    # (e.g. ["PostgreSQL"] when SQL is inferred because the CV mentions PostgreSQL).
+    inferred_from: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

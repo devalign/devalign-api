@@ -14,11 +14,20 @@ class ProfileRequestDTO(BaseModel):
 
 
 class SkillDTO(BaseModel):
+    """Represents a skill in the API response.
+
+    The `inferred_from` field is non-empty only for skills that were derived
+    from the knowledge graph (e.g. "SQL" inferred because the candidate has
+    "PostgreSQL"). Use this field in the UI to render a tooltip explaining
+    the inference rather than showing the skill as explicitly stated.
+    """
+
     name: str
     skill_type: str
     market_importance: str | None = None
     sfia_reference: str | None = None
     market_demand_percentage: int | None = None
+    inferred_from: list[str] = []  # Names of child skills that triggered this inference
 
 
 class DomainAffinityDTO(BaseModel):
