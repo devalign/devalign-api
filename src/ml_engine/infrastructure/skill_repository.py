@@ -37,6 +37,7 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         nature=SkillNature(m.nature) if m.nature else SkillNature.TECH,
         normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
         domain_tags=m.domain_tags if m.domain_tags else [],
+        core_domains=m.core_domains if m.core_domains else [],
         aliases=aliases,
         relations=relations,
         weight=float(m.weight),
@@ -106,6 +107,7 @@ class SQLSkillRepository(SkillRepository):
                 name=s.name,
                 nature=s.nature.value,
                 domain_tags=s.domain_tags,
+                core_domains=s.core_domains,
                 weight=s.weight,
                 embedding=s.embedding,
             )
@@ -129,6 +131,7 @@ class SQLSkillRepository(SkillRepository):
                     nature=SkillNature(m.nature) if m.nature else SkillNature.TECH,
                     normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
                     domain_tags=m.domain_tags if m.domain_tags else [],
+                    core_domains=m.core_domains if m.core_domains else [],
                     aliases=[a.alias_name for a in m.aliases],
                     relations=s.relations,  # Keep original domain relations in memory
                     weight=float(m.weight),

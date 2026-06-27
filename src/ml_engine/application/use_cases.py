@@ -289,7 +289,7 @@ class ProfileUserFromCVUseCase:
                 # Sort gaps by importance priority
                 skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
-            # Step 9: Persist profile
+            # Step 9: Persist profile (Only save primary diagnostic initially)
             profile = UserProfile(
                 user_id=user_id,
                 cv_id=cv_id,
@@ -297,7 +297,7 @@ class ProfileUserFromCVUseCase:
                 detected_skills=detected_skills,
                 seniority=seniority,
                 primary_affinity=primary,
-                secondary_affinities=secondaries,
+                secondary_affinities=[],  # Only save primary diagnostic initially
                 skill_gaps=skill_gaps,
                 full_name=extracted_data.get("full_name") or None,
                 current_job_role=extracted_data.get("current_job_role") or None,
@@ -323,6 +323,43 @@ class ProfileUserFromCVUseCase:
                 detected_skills, active_clusters
             )
 
+            primary_dto = ClusterAffinityDTO(
+                cluster_id=primary.cluster_id,
+                cluster_name=primary.cluster_name,
+                affinity_score=primary.affinity_score,
+                is_primary=True,
+                market_insights=primary.market_insights,
+                compatible_roles=primary.compatible_roles,
+                detected_skills=[
+                    SkillDTO(
+                        name=s.name,
+                        skill_type=s.nature.value,
+                        market_importance="critical"
+                        if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
+                        else (
+                            "high"
+                            if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
+                            else "medium"
+                        ),
+                        market_demand_percentage=round(s.frequency * 100)
+                        if s.frequency is not None
+                        else 100,
+                    )
+                    for s in primary.detected_skills
+                ],
+                skill_gaps=[
+                    SkillDTO(
+                        name=g.skill.name,
+                        skill_type=g.skill.nature.value,
+                        market_importance=g.market_importance,
+                        market_demand_percentage=round(g.skill.frequency * 100)
+                        if g.skill.frequency is not None
+                        else None,
+                    )
+                    for g in primary.skill_gaps
+                ],
+            )
+
             # Map DTOs
             return UserProfileDTO(
                 user_id=user_id,
@@ -330,92 +367,8 @@ class ProfileUserFromCVUseCase:
                 seniority=seniority.value,
                 primary_specialty=primary.cluster_name,
                 alignment_score=primary.affinity_score,
-                secondary_affinities=[
-                    ClusterAffinityDTO(
-                        cluster_id=a.cluster_id,
-                        cluster_name=a.cluster_name,
-                        affinity_score=a.affinity_score,
-                        is_primary=False,
-                        market_insights=a.market_insights,
-                        compatible_roles=a.compatible_roles,
-                        detected_skills=[
-                            SkillDTO(
-                                name=s.name,
-                                skill_type=s.nature.value,
-                                market_importance="critical"
-                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
-                                >= 2.0
-                                else (
-                                    "high"
-                                    if (
-                                        s.weight * (s.frequency if s.frequency is not None else 1.0)
-                                    )
-                                    >= 1.0
-                                    else "medium"
-                                ),
-                                market_demand_percentage=round(s.frequency * 100)
-                                if s.frequency is not None
-                                else 100,
-                            )
-                            for s in a.detected_skills
-                        ],
-                        skill_gaps=[
-                            SkillDTO(
-                                name=g.skill.name,
-                                skill_type=g.skill.nature.value,
-                                market_importance=g.market_importance,
-                                market_demand_percentage=round(g.skill.frequency * 100)
-                                if g.skill.frequency is not None
-                                else None,
-                            )
-                            for g in a.skill_gaps
-                        ],
-                    )
-                    for a in secondaries
-                ],
-                all_affinities=[
-                    ClusterAffinityDTO(
-                        cluster_id=a.cluster_id,
-                        cluster_name=a.cluster_name,
-                        affinity_score=a.affinity_score,
-                        is_primary=(a.cluster_id == primary.cluster_id),
-                        market_insights=a.market_insights,
-                        compatible_roles=a.compatible_roles,
-                        detected_skills=[
-                            SkillDTO(
-                                name=s.name,
-                                skill_type=s.nature.value,
-                                market_importance="critical"
-                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
-                                >= 2.0
-                                else (
-                                    "high"
-                                    if (
-                                        s.weight * (s.frequency if s.frequency is not None else 1.0)
-                                    )
-                                    >= 1.0
-                                    else "medium"
-                                ),
-                                market_demand_percentage=round(s.frequency * 100)
-                                if s.frequency is not None
-                                else 100,
-                            )
-                            for s in a.detected_skills
-                        ],
-                        skill_gaps=[
-                            SkillDTO(
-                                name=g.skill.name,
-                                skill_type=g.skill.nature.value,
-                                market_importance=g.market_importance,
-                                market_demand_percentage=round(g.skill.frequency * 100)
-                                if g.skill.frequency is not None
-                                else None,
-                            )
-                            for g in a.skill_gaps
-                        ],
-                    )
-                    for a in affinities
-                ],
+                secondary_affinities=[],
+                all_affinities=[primary_dto],
                 domain_affinities=domain_affinities_dto,
                 detected_skills=[
                     SkillDTO(
@@ -907,8 +860,8 @@ def compute_affinities_and_domains(
 
     domain_scores = {}
     for s in detected_skills:
-        if s.domain_tags:
-            for d in s.domain_tags:
+        if s.core_domains:
+            for d in s.core_domains:
                 if d not in domain_scores:
                     domain_scores[d] = 0.0
                 domain_scores[d] += s.weight * s.frequency
@@ -1020,8 +973,48 @@ class GetKnowledgeGraphUseCase:
         return GraphResponseDTO(nodes=nodes, links=links)
 
 
+def compute_domain_affinities(
+    detected_skills: list[Skill],
+    active_clusters: list[TechCluster],
+) -> list[DomainAffinityDTO]:
+    from src.ml_engine.application.dtos import DomainAffinityDTO
+    domain_scores = {}
+    for s in detected_skills:
+        if s.core_domains:
+            for d in s.core_domains:
+                if d not in domain_scores:
+                    domain_scores[d] = 0.0
+                domain_scores[d] += s.weight * (s.frequency if s.frequency is not None else 1.0)
+
+    domain_demands_accum: dict[str, list[float]] = {}
+    for cluster in active_clusters:
+        for skill in cluster.centroid_skills:
+            if skill.core_domains:
+                for d in skill.core_domains:
+                    d_clean = d.strip().lower()
+                    if d_clean not in domain_demands_accum:
+                        domain_demands_accum[d_clean] = []
+                    domain_demands_accum[d_clean].append(skill.frequency)
+
+    domain_market_demand = {
+        d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
+    }
+
+    total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
+    domain_affinities_dto = [
+        DomainAffinityDTO(
+            domain=d,
+            affinity_score=score / total_domain_score,
+            market_demand=domain_market_demand.get(d.strip().lower(), 0.5),
+        )
+        for d, score in domain_scores.items()
+    ]
+    domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
+    return domain_affinities_dto
+
+
 class GetMyProfileUseCase:
-    """Gets the logged-in user's profile and computes real-time affinities against active clusters."""
+    """Gets the logged-in user's profile and loads database-persisted diagnostics."""
 
     def __init__(
         self,
@@ -1041,9 +1034,11 @@ class GetMyProfileUseCase:
         active_clusters = await self._clusters.get_all_active()
         active_clusters = [c for c in active_clusters if c.centroid_skills]
 
-        primary, secondaries, all_affinities, domain_affinities_dto = (
-            compute_affinities_and_domains(profile.detected_skills, active_clusters)
-        )
+        domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
+
+        primary = profile.primary_affinity
+        secondaries = profile.secondary_affinities
+        all_affinities = [primary] + secondaries if primary.cluster_name != "Sin Diagnóstico" else []
 
         return UserProfileDTO(
             user_id=profile.user_id,
@@ -1165,3 +1160,63 @@ class GetMyProfileUseCase:
             certifications=profile.certifications,
             message="Profile retrieved successfully",
         )
+
+
+class EvaluateClusterDiagnosticUseCase:
+    """Computes the affinity of a user profile's detected skills against a specific cluster and saves it."""
+
+    def __init__(
+        self,
+        profile_repository: UserProfileRepository,
+        cluster_repository: ClusterRepository,
+    ) -> None:
+        self._profiles = profile_repository
+        self._clusters = cluster_repository
+
+    async def execute(self, user_id: UUID, cluster_name: str) -> UserProfileDTO | None:
+        from dataclasses import replace
+        from fastapi import HTTPException
+
+        profile = await self._profiles.get_by_user_id(user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+
+        active_clusters = await self._clusters.get_all_active()
+        requested_cluster = next((c for c in active_clusters if c.name == cluster_name), None)
+        if not requested_cluster:
+            raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
+
+        # Compute affinity for this cluster
+        primary, secondaries, affinities, _ = compute_affinities_and_domains(
+            profile.detected_skills, [requested_cluster]
+        )
+        if not affinities:
+            raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
+
+        new_affinity = affinities[0]
+        # Ensure is_primary is False since it's evaluated on demand
+        new_affinity = ClusterAffinity(
+            cluster_id=new_affinity.cluster_id,
+            cluster_name=new_affinity.cluster_name,
+            affinity_score=new_affinity.affinity_score,
+            is_primary=False,
+            market_insights=new_affinity.market_insights,
+            compatible_roles=new_affinity.compatible_roles,
+            ai_insight=new_affinity.ai_insight,
+            detected_skills=new_affinity.detected_skills,
+            skill_gaps=new_affinity.skill_gaps,
+        )
+
+        # Merge secondary_affinities (remove existing with same name if any)
+        existing_secondaries = [
+            a for a in profile.secondary_affinities if a.cluster_name != cluster_name
+        ]
+        updated_secondaries = existing_secondaries + [new_affinity]
+
+        # Save profile
+        updated_profile = replace(profile, secondary_affinities=updated_secondaries)
+        await self._profiles.save(updated_profile)
+
+        # Return updated profile
+        return await GetMyProfileUseCase(self._profiles, self._clusters).execute(user_id)
+

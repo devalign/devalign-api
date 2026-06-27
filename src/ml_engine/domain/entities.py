@@ -52,6 +52,7 @@ class Skill:
     nature: SkillNature
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
     domain_tags: list[str] = field(default_factory=list)
+    core_domains: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     relations: list[SkillRelation] = field(default_factory=list)
     weight: float = 1.0

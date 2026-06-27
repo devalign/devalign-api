@@ -140,7 +140,7 @@ async def seed_taxonomy() -> None:
         all_skills = await repo.get_all_skills()
         if not all_skills:
             print(
-                "⚠️  No skills found in the database. "
+                "[WARNING] No skills found in the database. "
                 "Run seed_demo_data.py or the normalisation pipeline first."
             )
             return
@@ -168,7 +168,7 @@ async def seed_taxonomy() -> None:
             resolved.append((child_id, parent_id, rel_type))
 
         if skipped:
-            print(f"\n  ⚠️  Skipped {len(skipped)} edges (skills not in catalog):")
+            print(f"\n  [WARNING] Skipped {len(skipped)} edges (skills not in catalog):")
             for msg in skipped:
                 print(msg)
 
@@ -179,7 +179,7 @@ async def seed_taxonomy() -> None:
         print(f"\n  Inserting {len(resolved)} edges (skipping existing ones)...")
         await repo.add_relations(resolved)
         await session.commit()
-        print(f"✅  Taxonomy seed complete. {len(resolved)} edges processed.")
+        print(f"Taxonomy seed complete. {len(resolved)} edges processed.")
 
 
 if __name__ == "__main__":

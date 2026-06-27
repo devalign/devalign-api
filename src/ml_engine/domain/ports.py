@@ -66,6 +66,11 @@ class UserProfileRepository(ABC):
         """Retrieve the latest profile for a user."""
         ...
 
+    @abstractmethod
+    async def delete_by_user_id(self, user_id: UUID) -> None:
+        """Delete the user profile and all associated data."""
+        ...
+
 
 class SkillRepository(ABC):
     """Port for skill persistence and retrieval."""

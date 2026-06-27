@@ -43,6 +43,7 @@ class SkillModel(Base):
     # "concept" | "tech" | "soft"
     nature: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
+    core_domains: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
     weight: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="1.0")
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -55,6 +56,9 @@ class SkillModel(Base):
     )
     diagnostic_skills: Mapped[list[DiagnosticSkillModel]] = relationship(
         "DiagnosticSkillModel", back_populates="skill", lazy="select"
+    )
+    profile_skills: Mapped[list[ProfileSkillModel]] = relationship(
+        "ProfileSkillModel", back_populates="skill", lazy="select"
     )
     aliases: Mapped[list[SkillAliasModel]] = relationship(
         "SkillAliasModel", back_populates="skill", lazy="select", cascade="all, delete-orphan"
@@ -254,6 +258,9 @@ class ProfileModel(Base):
     diagnostics: Mapped[list[DiagnosticModel]] = relationship(
         "DiagnosticModel", back_populates="profile", lazy="select", cascade="all, delete-orphan"
     )
+    profile_skills: Mapped[list[ProfileSkillModel]] = relationship(
+        "ProfileSkillModel", back_populates="profile", lazy="select", cascade="all, delete-orphan"
+    )
 
 
 class DiagnosticModel(Base):
@@ -333,3 +340,33 @@ class DiagnosticSkillModel(Base):
         "DiagnosticModel", back_populates="diagnostic_skills"
     )
     skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="diagnostic_skills")
+
+
+class ProfileSkillModel(Base):
+    """ORM model for the profile_skills table.
+
+    Connects a user's ProfileModel directly to the global SkillModel catalog.
+    Provides global persistence of detected/manual user skills.
+    """
+
+    __tablename__ = "profile_skills"
+
+    profile_skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    profile_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("profiles.profile_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+
+    # Relationships
+    profile: Mapped[ProfileModel] = relationship("ProfileModel", back_populates="profile_skills")
+    skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="profile_skills")

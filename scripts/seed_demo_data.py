@@ -1,4 +1,4 @@
-"""Development seed script for Devalign tech clusters and skills with weights and frequencies."""
+"""Development seed script for Devalign tech clusters and skills with weights, frequencies, domain_tags, and core_domains."""
 
 import asyncio
 import os
@@ -18,8 +18,18 @@ from src.ml_engine.infrastructure.models import (
 from src.shared.database import AsyncSessionLocal
 
 
+def get_nature_from_category(category: str) -> str:
+    if category in ("hard_skill", "tool"):
+        return "tech"
+    elif category == "soft_skill":
+        return "soft"
+    elif category == "methodology":
+        return "concept"
+    return "tech"
+
+
 async def seed() -> None:
-    print("Starting development database seeding with weights and frequencies...")
+    print("Starting development database seeding with weights, frequencies, domain_tags, and core_domains...")
     session = AsyncSessionLocal()
 
     # Generate a random unit vector for centroids (since pgvector needs it for compatibility)
@@ -35,28 +45,18 @@ async def seed() -> None:
             "description": "Desarrollo de lógica de servidor, APIs y arquitectura de microservicios robusta en ecosistema Java/Spring.",
             "job_offer_count": 145,
             "skills": [
-                {"name": "Java", "category": "hard_skill", "weight": 3.0, "frequency": 0.92},
-                {"name": "Spring Boot", "category": "hard_skill", "weight": 3.0, "frequency": 0.88},
-                {"name": "REST APIs", "category": "hard_skill", "weight": 2.0, "frequency": 0.80},
-                {
-                    "name": "Microservicios",
-                    "category": "hard_skill",
-                    "weight": 2.0,
-                    "frequency": 0.82,
-                },
-                {"name": "PostgreSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.74},
-                {"name": "AWS", "category": "hard_skill", "weight": 2.0, "frequency": 0.62},
-                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.70},
-                {"name": "Kubernetes", "category": "tool", "weight": 2.0, "frequency": 0.55},
-                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.90},
-                {"name": "Liderazgo", "category": "soft_skill", "weight": 1.0, "frequency": 0.85},
-                {
-                    "name": "Comunicación",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.80,
-                },
-                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.82},
+                {"name": "Java", "category": "hard_skill", "weight": 3.0, "frequency": 0.92, "domain_tags": ["java", "backend"], "core_domains": ["Backend"]},
+                {"name": "Spring Boot", "category": "hard_skill", "weight": 3.0, "frequency": 0.88, "domain_tags": ["spring", "backend", "java"], "core_domains": ["Backend"]},
+                {"name": "REST APIs", "category": "hard_skill", "weight": 2.0, "frequency": 0.80, "domain_tags": ["api", "rest"], "core_domains": ["Backend"]},
+                {"name": "Microservicios", "category": "hard_skill", "weight": 2.0, "frequency": 0.82, "domain_tags": ["microservices", "architecture"], "core_domains": ["Backend"]},
+                {"name": "PostgreSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.74, "domain_tags": ["database", "relational", "postgresql"], "core_domains": ["Data", "Backend"]},
+                {"name": "AWS", "category": "hard_skill", "weight": 2.0, "frequency": 0.62, "domain_tags": ["cloud", "aws"], "core_domains": ["Cloud", "DevOps"]},
+                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.70, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Kubernetes", "category": "tool", "weight": 2.0, "frequency": 0.55, "domain_tags": ["devops", "cloud", "kubernetes", "orchestration"], "core_domains": ["DevOps", "Cloud"]},
+                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.90, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
+                {"name": "Liderazgo", "category": "soft_skill", "weight": 1.0, "frequency": 0.85, "domain_tags": ["leadership"], "core_domains": []},
+                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.80, "domain_tags": ["communication"], "core_domains": []},
+                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.82, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
         {
@@ -64,28 +64,18 @@ async def seed() -> None:
             "description": "Desarrollo ágil de microservicios y APIs utilizando Python, FastAPI y bases de datos modernas.",
             "job_offer_count": 110,
             "skills": [
-                {"name": "Python", "category": "hard_skill", "weight": 3.0, "frequency": 0.95},
-                {"name": "FastAPI", "category": "hard_skill", "weight": 3.0, "frequency": 0.82},
-                {"name": "PostgreSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.78},
-                {"name": "MongoDB", "category": "hard_skill", "weight": 2.0, "frequency": 0.60},
-                {"name": "REST APIs", "category": "hard_skill", "weight": 2.0, "frequency": 0.85},
-                {"name": "AWS", "category": "hard_skill", "weight": 2.0, "frequency": 0.68},
-                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.75},
-                {"name": "Redis", "category": "hard_skill", "weight": 1.5, "frequency": 0.55},
-                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92},
-                {
-                    "name": "Trabajo en equipo",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.88,
-                },
-                {
-                    "name": "Resolución de problemas",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.90,
-                },
-                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80},
+                {"name": "Python", "category": "hard_skill", "weight": 3.0, "frequency": 0.95, "domain_tags": ["python", "backend"], "core_domains": ["Backend", "Data"]},
+                {"name": "FastAPI", "category": "hard_skill", "weight": 3.0, "frequency": 0.82, "domain_tags": ["fastapi", "backend", "python", "api"], "core_domains": ["Backend"]},
+                {"name": "PostgreSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.78, "domain_tags": ["database", "relational", "postgresql"], "core_domains": ["Data", "Backend"]},
+                {"name": "MongoDB", "category": "hard_skill", "weight": 2.0, "frequency": 0.60, "domain_tags": ["database", "nosql", "mongodb"], "core_domains": ["Data", "Backend"]},
+                {"name": "REST APIs", "category": "hard_skill", "weight": 2.0, "frequency": 0.85, "domain_tags": ["api", "rest"], "core_domains": ["Backend"]},
+                {"name": "AWS", "category": "hard_skill", "weight": 2.0, "frequency": 0.68, "domain_tags": ["cloud", "aws"], "core_domains": ["Cloud", "DevOps"]},
+                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.75, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Redis", "category": "hard_skill", "weight": 1.5, "frequency": 0.55, "domain_tags": ["database", "cache", "redis"], "core_domains": ["Backend"]},
+                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
+                {"name": "Trabajo en equipo", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["teamwork"], "core_domains": []},
+                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.90, "domain_tags": ["problem-solving"], "core_domains": []},
+                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
         {
@@ -93,27 +83,17 @@ async def seed() -> None:
             "description": "Construcción de interfaces de usuario interactivas y SPA modernas usando React, Next.js y CSS moderno.",
             "job_offer_count": 190,
             "skills": [
-                {"name": "React", "category": "hard_skill", "weight": 3.0, "frequency": 0.96},
-                {"name": "Next.js", "category": "hard_skill", "weight": 3.0, "frequency": 0.85},
-                {"name": "JavaScript", "category": "hard_skill", "weight": 2.5, "frequency": 0.94},
-                {"name": "TypeScript", "category": "hard_skill", "weight": 2.5, "frequency": 0.88},
-                {"name": "HTML5", "category": "hard_skill", "weight": 2.0, "frequency": 0.90},
-                {"name": "CSS3", "category": "hard_skill", "weight": 2.0, "frequency": 0.90},
-                {"name": "Tailwind CSS", "category": "tool", "weight": 1.5, "frequency": 0.82},
-                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92},
-                {
-                    "name": "Adaptabilidad",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.85,
-                },
-                {
-                    "name": "Comunicación",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.88,
-                },
-                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.85},
+                {"name": "React", "category": "hard_skill", "weight": 3.0, "frequency": 0.96, "domain_tags": ["react", "frontend", "javascript", "spa"], "core_domains": ["Frontend"]},
+                {"name": "Next.js", "category": "hard_skill", "weight": 3.0, "frequency": 0.85, "domain_tags": ["nextjs", "frontend", "react", "framework", "web"], "core_domains": ["Frontend"]},
+                {"name": "JavaScript", "category": "hard_skill", "weight": 2.5, "frequency": 0.94, "domain_tags": ["javascript", "frontend", "web"], "core_domains": ["Frontend"]},
+                {"name": "TypeScript", "category": "hard_skill", "weight": 2.5, "frequency": 0.88, "domain_tags": ["typescript", "frontend", "programming-language"], "core_domains": ["Frontend"]},
+                {"name": "HTML5", "category": "hard_skill", "weight": 2.0, "frequency": 0.90, "domain_tags": ["html", "frontend", "web"], "core_domains": ["Frontend"]},
+                {"name": "CSS3", "category": "hard_skill", "weight": 2.0, "frequency": 0.90, "domain_tags": ["css", "frontend", "web"], "core_domains": ["Frontend"]},
+                {"name": "Tailwind CSS", "category": "tool", "weight": 1.5, "frequency": 0.82, "domain_tags": ["tailwindcss", "css", "frontend", "design"], "core_domains": ["Frontend"]},
+                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
+                {"name": "Adaptabilidad", "category": "soft_skill", "weight": 1.0, "frequency": 0.85, "domain_tags": ["adaptability"], "core_domains": []},
+                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["communication"], "core_domains": []},
+                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.85, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
         {
@@ -121,22 +101,17 @@ async def seed() -> None:
             "description": "Automatización, integración continua (CI/CD) e infraestructura como código sobre nubes líderes.",
             "job_offer_count": 85,
             "skills": [
-                {"name": "Docker", "category": "tool", "weight": 3.0, "frequency": 0.94},
-                {"name": "Kubernetes", "category": "tool", "weight": 3.0, "frequency": 0.88},
-                {"name": "Terraform", "category": "tool", "weight": 3.0, "frequency": 0.80},
-                {"name": "AWS", "category": "hard_skill", "weight": 2.5, "frequency": 0.85},
-                {"name": "Linux", "category": "hard_skill", "weight": 2.5, "frequency": 0.78},
-                {"name": "CI/CD", "category": "methodology", "weight": 2.5, "frequency": 0.90},
-                {"name": "Prometheus", "category": "tool", "weight": 2.0, "frequency": 0.65},
-                {"name": "Grafana", "category": "tool", "weight": 2.0, "frequency": 0.68},
-                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.95},
-                {
-                    "name": "Resolución de problemas",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.92,
-                },
-                {"name": "Agile", "category": "methodology", "weight": 1.0, "frequency": 0.80},
+                {"name": "Docker", "category": "tool", "weight": 3.0, "frequency": 0.94, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Kubernetes", "category": "tool", "weight": 3.0, "frequency": 0.88, "domain_tags": ["devops", "cloud", "kubernetes", "orchestration"], "core_domains": ["DevOps", "Cloud"]},
+                {"name": "Terraform", "category": "tool", "weight": 3.0, "frequency": 0.80, "domain_tags": ["terraform", "devops", "cloud", "iac"], "core_domains": ["DevOps", "Cloud"]},
+                {"name": "AWS", "category": "hard_skill", "weight": 2.5, "frequency": 0.85, "domain_tags": ["cloud", "aws"], "core_domains": ["Cloud", "DevOps"]},
+                {"name": "Linux", "category": "hard_skill", "weight": 2.5, "frequency": 0.78, "domain_tags": ["linux", "os"], "core_domains": ["DevOps", "Backend"]},
+                {"name": "CI/CD", "category": "methodology", "weight": 2.5, "frequency": 0.90, "domain_tags": ["cicd", "devops", "automation"], "core_domains": ["DevOps"]},
+                {"name": "Prometheus", "category": "tool", "weight": 2.0, "frequency": 0.65, "domain_tags": ["prometheus", "monitoring", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Grafana", "category": "tool", "weight": 2.0, "frequency": 0.68, "domain_tags": ["grafana", "monitoring", "visualization", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.95, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
+                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.92, "domain_tags": ["problem-solving"], "core_domains": []},
+                {"name": "Agile", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["agile", "methodology"], "core_domains": []},
             ],
         },
         {
@@ -144,22 +119,17 @@ async def seed() -> None:
             "description": "Procesamiento de datos masivos (Big Data), diseño de pipelines ETL y bodegas analíticas en la nube.",
             "job_offer_count": 95,
             "skills": [
-                {"name": "Python", "category": "hard_skill", "weight": 3.0, "frequency": 0.92},
-                {"name": "Spark", "category": "hard_skill", "weight": 3.0, "frequency": 0.88},
-                {"name": "SQL", "category": "hard_skill", "weight": 2.5, "frequency": 0.90},
-                {"name": "NoSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.70},
-                {"name": "Kafka", "category": "tool", "weight": 2.5, "frequency": 0.75},
-                {"name": "Airflow", "category": "tool", "weight": 2.5, "frequency": 0.80},
-                {"name": "Snowflake", "category": "tool", "weight": 2.5, "frequency": 0.65},
-                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.60},
-                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.85},
-                {
-                    "name": "Pensamiento crítico",
-                    "category": "soft_skill",
-                    "weight": 1.0,
-                    "frequency": 0.88,
-                },
-                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80},
+                {"name": "Python", "category": "hard_skill", "weight": 3.0, "frequency": 0.92, "domain_tags": ["python", "backend"], "core_domains": ["Backend", "Data"]},
+                {"name": "Spark", "category": "hard_skill", "weight": 3.0, "frequency": 0.88, "domain_tags": ["spark", "bigdata", "data-engineering"], "core_domains": ["Data"]},
+                {"name": "SQL", "category": "hard_skill", "weight": 2.5, "frequency": 0.90, "domain_tags": ["sql", "database", "relational"], "core_domains": ["Data", "Backend"]},
+                {"name": "NoSQL", "category": "hard_skill", "weight": 2.0, "frequency": 0.70, "domain_tags": ["database", "nosql"], "core_domains": ["Data"]},
+                {"name": "Kafka", "category": "tool", "weight": 2.5, "frequency": 0.75, "domain_tags": ["kafka", "streaming", "pubsub", "messaging"], "core_domains": ["Data", "Backend"]},
+                {"name": "Airflow", "category": "tool", "weight": 2.5, "frequency": 0.80, "domain_tags": ["airflow", "orchestration", "data-engineering", "workflow"], "core_domains": ["Data", "DevOps"]},
+                {"name": "Snowflake", "category": "tool", "weight": 2.5, "frequency": 0.65, "domain_tags": ["snowflake", "cloud", "data-warehouse"], "core_domains": ["Data", "Cloud"]},
+                {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.60, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
+                {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.85, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
+                {"name": "Pensamiento crítico", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["critical-thinking"], "core_domains": []},
+                {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
     ]
@@ -199,17 +169,23 @@ async def seed() -> None:
             # Insert/load skills and link to cluster
             for sdata in cdata["skills"]:
                 sname_lower = sdata["name"].lower()
+                nature_val = get_nature_from_category(sdata["category"])
+                
                 if sname_lower in skill_cache:
                     skill = skill_cache[sname_lower]
-                    # Update category and weight to the latest definition
-                    skill.category = sdata["category"]
+                    # Update properties
+                    skill.nature = nature_val
                     skill.weight = sdata["weight"]
+                    skill.domain_tags = sdata["domain_tags"]
+                    skill.core_domains = sdata["core_domains"]
                 else:
                     skill = SkillModel(
                         skill_id=uuid4(),
                         name=sdata["name"],
-                        category=sdata["category"],
+                        nature=nature_val,
                         weight=sdata["weight"],
+                        domain_tags=sdata["domain_tags"],
+                        core_domains=sdata["core_domains"],
                     )
                     session.add(skill)
                     await session.flush()
@@ -225,7 +201,7 @@ async def seed() -> None:
                 session.add(cluster_skill)
 
         await session.commit()
-        print("Database seeded successfully with 5 clusters, weights, and frequencies!")
+        print("Database seeded successfully with 5 clusters, weights, frequencies, and core domains!")
     except Exception as e:
         await session.rollback()
         print(f"Error seeding database: {e}")

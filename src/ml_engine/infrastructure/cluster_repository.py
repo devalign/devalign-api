@@ -56,6 +56,7 @@ class SQLClusterRepository(ClusterRepository):
                         if cs.importance_score is not None
                         else 1.0,
                         domain_tags=cs.skill.domain_tags or [],
+                        core_domains=cs.skill.core_domains or [],
                     )
                 )
 
