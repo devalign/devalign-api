@@ -12,7 +12,12 @@ from src.ml_engine.application.dtos import (
     SkillsUpdateDTO,
     UserProfileDTO,
 )
-from src.ml_engine.application.use_cases import ListClustersUseCase, ProfileUserFromCVUseCase
+from src.ml_engine.application.use_cases import (
+    ListClustersUseCase,
+    ProfileUserFromCVUseCase,
+    GetMyProfileUseCase,
+    EvaluateClusterDiagnosticUseCase,
+)
 from src.ml_engine.domain.entities import UserProfile
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
@@ -208,16 +213,26 @@ async def update_my_skills(
     from uuid import UUID
 
     from fastapi import HTTPException
+    from sqlalchemy import select
 
     from src.ml_engine.domain.entities import Skill, SkillGap, SkillNature
+    from src.ml_engine.infrastructure.models import SkillModel
 
     repo = SQLUserProfileRepository(session)
     profile = await repo.get_by_user_id(UUID(current_user_id))
     if not profile:
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
 
+    # 1. Enriquecer Habilidades con la DB
+    skill_names = [s.name for s in data.skills]
+    db_skills = {}
+    if skill_names:
+        db_skills_result = await session.execute(
+            select(SkillModel).where(SkillModel.name.in_(skill_names))
+        )
+        db_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
+
     detected_skills = []
-    skill_gaps = []
     for s in data.skills:
         # Determine nature
         nature_val = SkillNature.TECH
@@ -231,34 +246,104 @@ async def update_my_skills(
                 elif "concept" in st_lower:
                     nature_val = SkillNature.CONCEPT
 
-        skill_entity = Skill(
-            name=s.name,
-            nature=nature_val,
-            normalized_name=s.name.lower().replace(" ", "").replace(".", ""),
-        )
-        if s.market_importance == "consolidated":
-            detected_skills.append(skill_entity)
-        else:
-            skill_gaps.append(
-                SkillGap(
-                    skill=skill_entity,
-                    market_importance=s.market_importance or "high",
-                )
+        norm_name = s.name.lower()
+        db_skill = db_skills.get(norm_name)
+        if db_skill:
+            skill_entity = Skill(
+                id=db_skill.skill_id,
+                name=db_skill.name,
+                nature=SkillNature(db_skill.nature) if db_skill.nature else nature_val,
+                normalized_name=db_skill.name.lower().replace(" ", "").replace(".", ""),
+                weight=float(db_skill.weight),
+                frequency=0.1,  # default placeholder frequency
+                domain_tags=db_skill.domain_tags or [],
+                core_domains=db_skill.core_domains or [],
             )
+        else:
+            skill_entity = Skill(
+                name=s.name,
+                nature=nature_val,
+                normalized_name=s.name.lower().replace(" ", "").replace(".", ""),
+            )
+        detected_skills.append(skill_entity)
 
+    # 2. Recalcular Diagnóstico Activo y Evaluados
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+    cluster_repo = SQLClusterRepository(session)
+
+    existing_diagnostics = [profile.primary_affinity] + profile.secondary_affinities
+    existing_diagnostics = [a for a in existing_diagnostics if a.cluster_name != "Sin Diagnóstico"]
+
+    clusters_to_eval = []
+    for diag in existing_diagnostics:
+        cluster = await cluster_repo.get_by_id(diag.cluster_id)
+        if cluster:
+            clusters_to_eval.append(cluster)
+
+    if not clusters_to_eval:
+        active_clusters = await cluster_repo.get_all_active()
+        clusters_to_eval = [c for c in active_clusters if c.centroid_skills]
+
+    # Recalcular affinities
+    from src.ml_engine.application.use_cases import compute_affinities_and_domains
+    primary, secondaries, all_affinities, _ = compute_affinities_and_domains(
+        detected_skills, clusters_to_eval
+    )
+
+    if not primary:
+        from src.ml_engine.domain.entities import ClusterAffinity
+        from uuid import uuid4
+        primary = ClusterAffinity(
+            cluster_id=uuid4(),
+            cluster_name="Sin Diagnóstico",
+            affinity_score=0.0,
+            is_primary=True,
+        )
+        secondaries = []
+
+    # 3. Persistir el perfil con los diagnósticos actualizados
     from dataclasses import replace
-
-    updated_profile = replace(profile, detected_skills=detected_skills, skill_gaps=skill_gaps)
+    updated_profile = replace(
+        profile,
+        detected_skills=detected_skills,
+        primary_affinity=primary,
+        secondary_affinities=secondaries,
+        skill_gaps=primary.skill_gaps,
+    )
     await repo.save(updated_profile)
 
-    from src.ml_engine.application.use_cases import GetMyProfileUseCase
-    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-
-    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
-        UUID(current_user_id)
-    )
+    # 4. Devolver perfil actualizado
+    dto = await GetMyProfileUseCase(repo, cluster_repo).execute(UUID(current_user_id))
     if not dto:
         raise HTTPException(status_code=404, detail="Profile not found after update")
+    return dto
+
+
+@router.post(
+    "/evaluate-cluster/{cluster_name}",
+    response_model=UserProfileDTO,
+    summary="Evaluate user's CV/skills against a specific tech cluster",
+)
+async def evaluate_cluster_diagnostic(
+    cluster_name: str,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> UserProfileDTO:
+    """
+    Evaluate the user's current profile/skills against a specific tech cluster,
+    saving the diagnostic results under secondary_affinities.
+    """
+    from uuid import UUID
+    from fastapi import HTTPException
+    from src.ml_engine.application.use_cases import EvaluateClusterDiagnosticUseCase
+
+    repo = SQLUserProfileRepository(session)
+    cluster_repo = SQLClusterRepository(session)
+    use_case = EvaluateClusterDiagnosticUseCase(repo, cluster_repo)
+
+    dto = await use_case.execute(UUID(current_user_id), cluster_name)
+    if not dto:
+        raise HTTPException(status_code=404, detail="Failed to evaluate cluster diagnostic.")
     return dto
 
 

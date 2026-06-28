@@ -52,12 +52,17 @@ class Skill:
     nature: SkillNature
     normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
     domain_tags: list[str] = field(default_factory=list)
+    core_domains: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     relations: list[SkillRelation] = field(default_factory=list)
     weight: float = 1.0
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     embedding: list[float] | None = None
     id: UUID | None = None
+    # Non-empty only for skills inferred via the knowledge graph.
+    # Contains the canonical names of child skills that triggered this inference
+    # (e.g. ["PostgreSQL"] when SQL is inferred because the CV mentions PostgreSQL).
+    inferred_from: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

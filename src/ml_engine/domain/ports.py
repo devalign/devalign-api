@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 from uuid import UUID
 
-from src.ml_engine.domain.entities import Skill, TechCluster, UserProfile
+from src.ml_engine.domain.entities import Skill, SkillRelationType, TechCluster, UserProfile
 
 
 class LLMService(ABC):
@@ -66,18 +66,35 @@ class UserProfileRepository(ABC):
         """Retrieve the latest profile for a user."""
         ...
 
+    @abstractmethod
+    async def delete_by_user_id(self, user_id: UUID) -> None:
+        """Delete the user profile and all associated data."""
+        ...
+
 
 class SkillRepository(ABC):
     """Port for skill persistence and retrieval."""
 
     @abstractmethod
     async def get_all_skills(self) -> list[Skill]:
-        """Retrieve all canonical skills for similarity checking."""
+        """Retrieve all canonical skills with aliases and outgoing relations."""
+        ...
+
+    @abstractmethod
+    async def get_skill_graph(self) -> dict[UUID, Skill]:
+        """Load the full skill graph as a {skill_id: Skill} map for O(1) lookups."""
         ...
 
     @abstractmethod
     async def save_skills(self, skills: list[Skill]) -> list[Skill]:
         """Save new skills to the database and return them with populated IDs."""
+        ...
+
+    @abstractmethod
+    async def add_relations(
+        self, relations: list[tuple[UUID, UUID, SkillRelationType]]
+    ) -> None:
+        """Persist skill-to-skill knowledge graph edges (idempotent)."""
         ...
 
 

@@ -9,6 +9,7 @@ from src.delivery.application.use_cases import (
     DeleteCVUseCase,
     GetCurrentUserUseCase,
     ListUserCVsUseCase,
+    ResetAccountUseCase,
     UploadCVUseCase,
 )
 from src.delivery.infrastructure.repository import SQLAlchemyCVRepository, SQLAlchemyUserRepository
@@ -231,3 +232,27 @@ async def delete_cv(
         user_id=UUID(current_user_id),
         cv_id=cv_id,
     )
+
+
+@router.post(
+    "/me/reset",
+    status_code=204,
+    summary="Reset user account data",
+)
+async def reset_account(
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> None:
+    """
+    Permanently deletes all CV documents, storage files, and computed developer profile data
+    associated with the authenticated user. Keep the user account active.
+    """
+    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
+
+    use_case = ResetAccountUseCase(
+        cv_repository=SQLAlchemyCVRepository(session),
+        profile_repository=SQLUserProfileRepository(session),
+        storage_service=SupabaseStorageService(get_supabase_admin_client()),
+    )
+    await use_case.execute(UUID(current_user_id))
+

@@ -8,6 +8,7 @@ import structlog
 from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
 from src.delivery.domain.entities import CVDocument, User
 from src.delivery.domain.ports import CVRepository, StorageService, UserRepository
+from src.ml_engine.domain.ports import UserProfileRepository
 from src.shared.exceptions import (
     AuthorizationError,
     FileTooLargeError,
@@ -197,3 +198,48 @@ class DeleteCVUseCase:
 
         # Delete from database (also clears profile references)
         await self._cvs.delete(cv.id)
+
+
+class ResetAccountUseCase:
+    """Reset user account: deletes all CV documents (storage + DB) and profile/diagnostics."""
+
+    def __init__(
+        self,
+        cv_repository: CVRepository,
+        profile_repository: UserProfileRepository,
+        storage_service: StorageService,
+    ) -> None:
+        self._cvs = cv_repository
+        self._profiles = profile_repository
+        self._storage = storage_service
+
+    async def execute(self, user_id: UUID) -> None:
+        import asyncio
+
+        logger.info("Resetting user account data", user_id=str(user_id))
+
+        # 1. Fetch all CVs for the user
+        cv_docs = await self._cvs.get_by_user_id(user_id)
+
+        # 2. Delete CV files from storage in parallel
+        async def _safe_delete_storage(storage_path: str) -> None:
+            try:
+                await self._storage.delete_cv(storage_path)
+            except Exception as exc:
+                logger.error(
+                    "Failed to delete CV from storage during account reset",
+                    storage_path=storage_path,
+                    error=str(exc),
+                )
+
+        if cv_docs:
+            await asyncio.gather(*[_safe_delete_storage(cv.storage_path) for cv in cv_docs])
+
+        # 3. Delete CV records from database
+        for cv in cv_docs:
+            await self._cvs.delete(cv.id)
+
+        # 4. Delete user profile (cascades to diagnostics and skills)
+        await self._profiles.delete_by_user_id(user_id)
+
+

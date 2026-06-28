@@ -88,7 +88,8 @@ Analyze the following list of raw skills and normalize them into a Knowledge Gra
 For each skill, provide:
 - canonical_name: The standard, capitalized name of the technology/concept (e.g., "React", "PostgreSQL", "Microservices").
 - nature: Must be exactly one of: "concept", "tech", "soft".
-- domain_tags: A list of relevant domains (e.g., ["Frontend", "Web"], ["Cloud", "DevOps"], ["Methodology"]).
+- domain_tags: A list of specific, customized tags representing detailed sub-domains or categories (e.g., ["web", "frontend", "spa"], ["database", "relational"], ["microservices", "api"], ["cloud", "serverless"]).
+- core_domains: A list of general core domains. MUST be selected strictly from: ["Backend", "Frontend", "Mobile", "QA", "DevOps", "Cloud", "Data"]. If a skill doesn't fit any, return an empty list.
 - aliases: A list of common alternate spellings or raw inputs that should map to this (including the raw input provided).
 
 Raw skills to classify:
@@ -102,6 +103,7 @@ Format:
       "canonical_name": "...",
       "nature": "...",
       "domain_tags": ["...", "..."],
+      "core_domains": ["...", "..."],
       "aliases": ["...", "..."]
     }}
   ]
@@ -136,6 +138,7 @@ Format:
                         nature=nature,
                         normalized_name=norm_name,
                         domain_tags=item.get("domain_tags", []),
+                        core_domains=item.get("core_domains", []),
                         aliases=list(aliases),
                         weight=1.0,
                     )
@@ -153,6 +156,7 @@ Format:
                         nature=SkillNature.TECH,
                         normalized_name=norm_name,
                         domain_tags=["Unknown"],
+                        core_domains=[],
                         aliases=[raw.lower()],
                     )
                 )
