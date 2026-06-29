@@ -141,6 +141,7 @@ class UploadCVUseCase:
             storage_path=saved_cv.storage_path,
             original_filename=saved_cv.original_filename,
             size_bytes=saved_cv.size_bytes,
+            status=saved_cv.status,
             download_url=download_url,
             uploaded_at=saved_cv.uploaded_at,
         )
@@ -170,6 +171,7 @@ class ListUserCVsUseCase:
                     storage_path=cv.storage_path,
                     original_filename=cv.original_filename,
                     size_bytes=cv.size_bytes,
+                    status=cv.status,
                     download_url=url,
                     uploaded_at=cv.uploaded_at,
                 )

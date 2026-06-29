@@ -126,6 +126,11 @@ async def run_profile_analysis_task(
 
     try:
         async with AsyncSessionLocal() as session:
+            # Explicitly set status to processing (necessary for reanalyze)
+            cv_repo = SQLAlchemyCVRepository(session)
+            await cv_repo.update_status(cv_id, "processing")
+            await session.commit()
+
             use_case = ProfileUserFromCVUseCase(
                 cv_parser=LocalCVParserService(),
                 cluster_repository=SQLClusterRepository(session),
@@ -139,11 +144,19 @@ async def run_profile_analysis_task(
                 cv_content=content,
                 content_type=content_type,
             )
-            # Session context manager commits on success or rolls back on exception
+            # Mark CV processing as completed
+            await cv_repo.update_status(cv_id, "completed")
             await session.commit()
             bg_logger.info("Background CV analysis completed successfully", user_id=str(user_id))
     except Exception as exc:
         bg_logger.exception("Background CV analysis failed", user_id=str(user_id), error=str(exc))
+        try:
+            async with AsyncSessionLocal() as fail_session:
+                cv_repo = SQLAlchemyCVRepository(fail_session)
+                await cv_repo.update_status(cv_id, "failed")
+                await fail_session.commit()
+        except Exception as db_exc:
+            bg_logger.exception("Failed to update CV status to failed in database", user_id=str(user_id), error=str(db_exc))
 
 
 @router.get("/me/cvs", response_model=CVListDTO, summary="List uploaded CVs")

@@ -30,6 +30,7 @@ class CVDocument:
     original_filename: str
     content_type: str
     size_bytes: int
+    status: str = "processing"
     uploaded_at: datetime = field(default_factory=datetime.utcnow)
 
     @property
