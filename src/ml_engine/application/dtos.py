@@ -28,6 +28,13 @@ class SkillDTO(BaseModel):
     sfia_reference: str | None = None
     market_demand_percentage: int | None = None
     inferred_from: list[str] = []  # Names of child skills that triggered this inference
+    # Evidence and proficiency level
+    self_taught: bool = False
+    personal_projects: bool = False
+    years_of_experience: int = 0
+    has_certification: bool = False
+    ict_score: float = 0.0
+    trend: str | None = None
 
 
 class DomainAffinityDTO(BaseModel):

@@ -39,7 +39,11 @@ class SkillModel(Base):
 
     skill_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Normalized skill name — lowercase, canonical form (e.g. "react.js", "kubernetes")
-    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    # ESCO identifier URI (nullable for custom skills, unique)
+    esco_uri: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, unique=True, index=True
+    )
     # "concept" | "tech" | "soft"
     nature: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
@@ -88,7 +92,7 @@ class SkillAliasModel(Base):
     __tablename__ = "skill_aliases"
 
     alias_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
-    alias_name: Mapped[str] = mapped_column(String(150), nullable=False, unique=True, index=True)
+    alias_name: Mapped[str] = mapped_column(String(500), nullable=False, unique=True, index=True)
     skill_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("skills.skill_id", ondelete="CASCADE"),
@@ -346,7 +350,7 @@ class ProfileSkillModel(Base):
     """ORM model for the profile_skills table.
 
     Connects a user's ProfileModel directly to the global SkillModel catalog.
-    Provides global persistence of detected/manual user skills.
+    Provides global persistence of detected/manual user skills along with evidence and ICT score.
     """
 
     __tablename__ = "profile_skills"
@@ -367,6 +371,49 @@ class ProfileSkillModel(Base):
         index=True,
     )
 
+    # Evidence sources
+    self_taught: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    personal_projects: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    years_of_experience: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    has_certification: Mapped[bool] = mapped_column(nullable=False, server_default="false")
+    # Computed competence index (ICT) score from evidence (0.0 to 10.0)
+    ict_score: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="0.0")
+
     # Relationships
     profile: Mapped[ProfileModel] = relationship("ProfileModel", back_populates="profile_skills")
     skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="profile_skills")
+
+
+class ClusterSkillTrendModel(Base):
+    """ORM model for the cluster_skill_trends table.
+
+    Stores the historical frequency/importance score of skills in a cluster
+    for temporal trend analysis (Mittas factor).
+    """
+
+    __tablename__ = "cluster_skill_trends"
+
+    trend_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    cluster_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("clusters.cluster_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
+    )
+    frequency: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, server_default="0.0")
+    importance_score: Mapped[float] = mapped_column(
+        Numeric(5, 2), nullable=False, server_default="0.0"
+    )
+
+    # Relationships
+    cluster: Mapped[ClusterModel] = relationship("ClusterModel")
+    skill: Mapped[SkillModel] = relationship("SkillModel")

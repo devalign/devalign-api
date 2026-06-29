@@ -54,7 +54,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         profile_model.work_experience = profile.work_experience
         profile_model.education = profile.education
         profile_model.certifications = profile.certifications
-        profile_model.cv_embedding = profile.embedding
+        profile_model.cv_embedding = profile.embedding if profile.embedding else None
         profile_model.cv_id = profile.cv_id
 
         await self._session.flush()
@@ -190,6 +190,11 @@ class SQLUserProfileRepository(UserProfileRepository):
                 profile_skill_id=uuid4(),
                 profile_id=profile_model.profile_id,
                 skill_id=skill_model.skill_id,
+                self_taught=skill.self_taught,
+                personal_projects=skill.personal_projects,
+                years_of_experience=skill.years_of_experience,
+                has_certification=skill.has_certification,
+                ict_score=skill.calculate_ict(),
             )
             self._session.add(profile_skill_rel)
 
@@ -227,6 +232,11 @@ class SQLUserProfileRepository(UserProfileRepository):
                     frequency=1.0,
                     domain_tags=ps.skill.domain_tags or [],
                     core_domains=ps.skill.core_domains or [],
+                    self_taught=ps.self_taught,
+                    personal_projects=ps.personal_projects,
+                    years_of_experience=ps.years_of_experience,
+                    has_certification=ps.has_certification,
+                    ict_score=float(ps.ict_score),
                 )
                 global_detected_skills.append(skill_entity)
 

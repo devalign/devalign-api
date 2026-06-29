@@ -13,17 +13,17 @@ from src.ml_engine.application.dtos import (
     UserProfileDTO,
 )
 from src.ml_engine.application.use_cases import (
+    EvaluateClusterDiagnosticUseCase,
+    GetMyProfileUseCase,
     ListClustersUseCase,
     ProfileUserFromCVUseCase,
-    GetMyProfileUseCase,
-    EvaluateClusterDiagnosticUseCase,
 )
 from src.ml_engine.domain.entities import UserProfile
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
 from src.ml_engine.infrastructure.llm_client import get_llm_service
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
-from src.shared.security import CurrentUserIdDep, OptionalUserIdDep
+from src.shared.security import CurrentUserIdDep, CurrentUserPayloadDep, OptionalUserIdDep
 
 router = APIRouter(prefix="/profile", tags=["ML Engine — Profiling"])
 
@@ -118,25 +118,54 @@ async def normalize_skills(session: SessionDep) -> dict[str, Any]:
     summary="Get logged-in user's computed profile",
 )
 async def get_my_profile(
-    current_user_id: CurrentUserIdDep,
+    payload: CurrentUserPayloadDep,
     session: SessionDep,
 ) -> UserProfileDTO:
     """
     Get the computed profile of the authenticated developer.
     Returns HTTP 404 if no CV has been analyzed yet.
     """
+    from datetime import datetime
     from uuid import UUID
 
     from fastapi import HTTPException
+    from sqlalchemy import select
 
+    from src.delivery.infrastructure.models import UserModel
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+
+    user_id = UUID(str(payload.get("sub")))
+
+    # JIT Provisioning fallback
+    user_result = await session.execute(
+        select(UserModel).where(UserModel.user_id == user_id)
+    )
+    user_exists = user_result.scalar_one_or_none()
+
+    if not user_exists:
+        email = str(payload.get("email") or "")
+        user_metadata = payload.get("user_metadata") or {}
+        if not isinstance(user_metadata, dict):
+            user_metadata = {}
+        full_name = str(user_metadata.get("full_name") or user_metadata.get("name") or "") or None
+        avatar_url = str(user_metadata.get("avatar_url") or user_metadata.get("picture") or "") or None
+
+        new_user = UserModel(
+            user_id=user_id,
+            email=email,
+            full_name=full_name,
+            avatar_url=avatar_url,
+            created_at=datetime.utcnow()
+        )
+        session.add(new_user)
+        await session.flush()
 
     repo = SQLUserProfileRepository(session)
     cluster_repo = SQLClusterRepository(session)
     use_case = GetMyProfileUseCase(repo, cluster_repo)
 
-    dto = await use_case.execute(UUID(current_user_id))
+    dto = await use_case.execute(user_id)
     if not dto:
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
 
@@ -215,7 +244,7 @@ async def update_my_skills(
     from fastapi import HTTPException
     from sqlalchemy import select
 
-    from src.ml_engine.domain.entities import Skill, SkillGap, SkillNature
+    from src.ml_engine.domain.entities import Skill, SkillNature
     from src.ml_engine.infrastructure.models import SkillModel
 
     repo = SQLUserProfileRepository(session)
@@ -291,8 +320,9 @@ async def update_my_skills(
     )
 
     if not primary:
-        from src.ml_engine.domain.entities import ClusterAffinity
         from uuid import uuid4
+
+        from src.ml_engine.domain.entities import ClusterAffinity
         primary = ClusterAffinity(
             cluster_id=uuid4(),
             cluster_name="Sin Diagnóstico",
@@ -334,8 +364,8 @@ async def evaluate_cluster_diagnostic(
     saving the diagnostic results under secondary_affinities.
     """
     from uuid import UUID
+
     from fastapi import HTTPException
-    from src.ml_engine.application.use_cases import EvaluateClusterDiagnosticUseCase
 
     repo = SQLUserProfileRepository(session)
     cluster_repo = SQLClusterRepository(session)
@@ -354,6 +384,7 @@ async def evaluate_cluster_diagnostic(
 async def get_skills_graph(
     session: SessionDep,
     current_user_id: OptionalUserIdDep = None,
+    cluster: str | None = None,
 ) -> Any:
     """
     Returns the complete knowledge graph of skills, including explicit relationships
@@ -371,7 +402,7 @@ async def get_skills_graph(
     )
 
     uid = UUID(current_user_id) if current_user_id else None
-    return await use_case.execute(user_id=uid)
+    return await use_case.execute(user_id=uid, cluster_name=cluster)
 
 
 def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:

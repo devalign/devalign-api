@@ -256,3 +256,30 @@ async def reset_account(
     )
     await use_case.execute(UUID(current_user_id))
 
+
+@router.delete(
+    "/me",
+    status_code=204,
+    summary="Permanently delete user account",
+)
+async def delete_account(
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> None:
+    """
+    Permanently deletes all user data and the user account itself from the system and identity provider.
+    """
+    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
+    
+    # 1. Reset all local data (CVs, profile, storage)
+    use_case = ResetAccountUseCase(
+        cv_repository=SQLAlchemyCVRepository(session),
+        profile_repository=SQLUserProfileRepository(session),
+        storage_service=SupabaseStorageService(get_supabase_admin_client()),
+    )
+    await use_case.execute(UUID(current_user_id))
+    
+    # 2. Delete user from Supabase Auth
+    admin_client = get_supabase_admin_client()
+    admin_client.auth.admin.delete_user(current_user_id)
+

@@ -22,9 +22,11 @@ from src.delivery.infrastructure.models import CVDocumentModel, UserModel  # noq
 from src.ml_engine.infrastructure.models import (  # noqa: F401
     ClusterModel,
     ClusterSkillModel,
+    ClusterSkillTrendModel,
     DiagnosticModel,
     DiagnosticSkillModel,
     ProfileModel,
+    ProfileSkillModel,
     SkillModel,
 )
 from src.scraper.infrastructure.models import JobOfferModel, OfferSkillModel  # noqa: F401

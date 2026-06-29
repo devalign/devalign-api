@@ -28,6 +28,7 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
                 normalized_name="java",
                 weight=3.0,
                 frequency=1.0,
+                ict_score=10.0,
             )
         ],
         seniority=SeniorityLevel.MID,
