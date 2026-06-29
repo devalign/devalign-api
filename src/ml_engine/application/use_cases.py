@@ -71,15 +71,22 @@ class ProfileUserFromCVUseCase:
         self._catalog = skill_catalog or SkillCatalogService(skill_repository, llm_service)
 
     async def _normalize_user_skills(
-        self, raw_skills: dict[str, list[str]] | list[str] | Any
+        self, raw_skills: list[dict[str, Any]] | dict[str, list[str]] | Any
     ) -> list[Skill]:
-        # Flatten raw skills into a single list of strings
+        # Handle the list of dicts structure (new LLM format)
+        skill_evidence_map = {}
         raw_strings = []
+
         if isinstance(raw_skills, list):
             for item in raw_skills:
-                if isinstance(item, str):
+                if isinstance(item, dict) and "name" in item:
+                    name = item["name"]
+                    raw_strings.append(name)
+                    skill_evidence_map[name.lower().strip()] = item
+                elif isinstance(item, str):
                     raw_strings.append(item)
         elif isinstance(raw_skills, dict):
+            # Backward compatibility / fallback mock format support
             for val_list in raw_skills.values():
                 if isinstance(val_list, list):
                     for item in val_list:
@@ -90,7 +97,44 @@ class ProfileUserFromCVUseCase:
             return []
 
         # Delegate to the O(1) + LLM fallback service
-        return await self._catalog.resolve_skills(raw_strings)
+        resolved_skills = await self._catalog.resolve_skills(raw_strings)
+
+        # Decorate resolved skills with their evidence details
+        decorated_skills = []
+        for skill in resolved_skills:
+            evidence = None
+            norm_name = skill.name.lower().strip()
+            if norm_name in skill_evidence_map:
+                evidence = skill_evidence_map[norm_name]
+            else:
+                # Try to find by partial match or aliases
+                for k, v in skill_evidence_map.items():
+                    if k in norm_name or norm_name in k:
+                        evidence = v
+                        break
+
+            if evidence:
+                self_taught = bool(evidence.get("self_taught", False))
+                personal_projects = bool(evidence.get("personal_projects", False))
+                years_exp = int(evidence.get("years_of_experience", 0) or 0)
+                has_cert = bool(evidence.get("has_certification", False))
+
+                stamped_skill = dc_replace(
+                    skill,
+                    self_taught=self_taught,
+                    personal_projects=personal_projects,
+                    years_of_experience=years_exp,
+                    has_certification=has_cert,
+                )
+                stamped_skill = dc_replace(
+                    stamped_skill,
+                    ict_score=stamped_skill.calculate_ict()
+                )
+                decorated_skills.append(stamped_skill)
+            else:
+                decorated_skills.append(skill)
+
+        return decorated_skills
 
     async def _expand_with_upward_inference(self, skills: list[Skill]) -> list[Skill]:
         """Traverse upward-pointing relations in the skill graph to infer implicit parent skills.
@@ -132,22 +176,39 @@ class ProfileUserFromCVUseCase:
                 if relation.relation_type not in _upward_types:
                     continue
                 parent_id = relation.target_skill_id
-                if parent_id in skill_graph and parent_id not in inferred_skills:
-                    parent_skill = skill_graph[parent_id]
-                    # Stamp provenance: record which child triggered this inference.
-                    # Skill is frozen, so we use dataclasses.replace() for immutability.
-                    stamped_parent = dc_replace(
-                        parent_skill,
-                        inferred_from=[current_skill.name],
-                    )
-                    inferred_skills[parent_id] = stamped_parent
-                    to_process.append(stamped_parent)
-                    logger.debug(
-                        "Inferred parent skill",
-                        child=current_skill.name,
-                        parent=parent_skill.name,
-                        relation=relation.relation_type,
-                    )
+                if parent_id in skill_graph:
+                    if parent_id not in inferred_skills:
+                        parent_skill = skill_graph[parent_id]
+                        stamped_parent = dc_replace(
+                            parent_skill,
+                            inferred_from=[current_skill.name],
+                            self_taught=current_skill.self_taught,
+                            personal_projects=current_skill.personal_projects,
+                            years_of_experience=current_skill.years_of_experience,
+                            has_certification=current_skill.has_certification,
+                            ict_score=current_skill.ict_score,
+                        )
+                        inferred_skills[parent_id] = stamped_parent
+                        to_process.append(stamped_parent)
+                        logger.debug(
+                            "Inferred parent skill",
+                            child=current_skill.name,
+                            parent=parent_skill.name,
+                            relation=relation.relation_type,
+                        )
+                    else:
+                        existing = inferred_skills[parent_id]
+                        if current_skill.ict_score > existing.ict_score:
+                            stamped_parent = dc_replace(
+                                existing,
+                                inferred_from=list(set(existing.inferred_from + [current_skill.name])),
+                                self_taught=existing.self_taught or current_skill.self_taught,
+                                personal_projects=existing.personal_projects or current_skill.personal_projects,
+                                years_of_experience=max(existing.years_of_experience, current_skill.years_of_experience),
+                                has_certification=existing.has_certification or current_skill.has_certification,
+                                ict_score=max(existing.ict_score, current_skill.ict_score),
+                            )
+                            inferred_skills[parent_id] = stamped_parent
 
         return list(inferred_skills.values())
 
@@ -187,12 +248,18 @@ class ProfileUserFromCVUseCase:
                     "preferred_modality": "Híbrido",
                     "location": "Lima, Perú",
                     "availability": "Inmediata",
-                    "skills": {
-                        "technical": ["Python", "SQL", "NoSQL"],
-                        "soft": ["Liderazgo", "Comunicación"],
-                        "tools": ["Docker", "Kubernetes", "Git"],
-                        "methodologies": ["Scrum", "Microservicios"],
-                    },
+                    "skills": [
+                        {"name": "Python", "category": "technical", "self_taught": False, "personal_projects": True, "years_of_experience": 3, "has_certification": True},
+                        {"name": "SQL", "category": "technical", "self_taught": True, "personal_projects": False, "years_of_experience": 4, "has_certification": False},
+                        {"name": "NoSQL", "category": "technical", "self_taught": True, "personal_projects": True, "years_of_experience": 2, "has_certification": False},
+                        {"name": "Liderazgo", "category": "soft", "self_taught": False, "personal_projects": False, "years_of_experience": 2, "has_certification": False},
+                        {"name": "Comunicación", "category": "soft", "self_taught": False, "personal_projects": False, "years_of_experience": 2, "has_certification": False},
+                        {"name": "Docker", "category": "tools", "self_taught": True, "personal_projects": True, "years_of_experience": 2, "has_certification": False},
+                        {"name": "Kubernetes", "category": "tools", "self_taught": True, "personal_projects": False, "years_of_experience": 1, "has_certification": False},
+                        {"name": "Git", "category": "tools", "self_taught": False, "personal_projects": True, "years_of_experience": 4, "has_certification": False},
+                        {"name": "Scrum", "category": "methodologies", "self_taught": False, "personal_projects": False, "years_of_experience": 3, "has_certification": True},
+                        {"name": "Microservicios", "category": "methodologies", "self_taught": False, "personal_projects": True, "years_of_experience": 3, "has_certification": False},
+                    ],
                     "work_experience": [
                         {
                             "company": "Tech Solutions",
@@ -323,6 +390,8 @@ class ProfileUserFromCVUseCase:
                 detected_skills, active_clusters
             )
 
+            user_skills_map = {s.normalized_name: s for s in detected_skills}
+
             primary_dto = ClusterAffinityDTO(
                 cluster_id=primary.cluster_id,
                 cluster_name=primary.cluster_name,
@@ -344,6 +413,12 @@ class ProfileUserFromCVUseCase:
                         market_demand_percentage=round(s.frequency * 100)
                         if s.frequency is not None
                         else 100,
+                        self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
+                        personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
+                        years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
+                        has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
+                        ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                        trend=determine_trend(s.name),
                     )
                     for s in primary.detected_skills
                 ],
@@ -355,6 +430,7 @@ class ProfileUserFromCVUseCase:
                         market_demand_percentage=round(g.skill.frequency * 100)
                         if g.skill.frequency is not None
                         else None,
+                        trend=determine_trend(g.skill.name),
                     )
                     for g in primary.skill_gaps
                 ],
@@ -378,6 +454,12 @@ class ProfileUserFromCVUseCase:
                         market_demand_percentage=round(s.frequency * 100)
                         if s.frequency is not None
                         else 100,
+                        self_taught=s.self_taught,
+                        personal_projects=s.personal_projects,
+                        years_of_experience=s.years_of_experience,
+                        has_certification=s.has_certification,
+                        ict_score=s.ict_score,
+                        trend=determine_trend(s.name),
                     )
                     for s in detected_skills
                 ],
@@ -389,6 +471,7 @@ class ProfileUserFromCVUseCase:
                         market_demand_percentage=round(g.skill.frequency * 100)
                         if g.skill.frequency is not None
                         else None,
+                        trend=determine_trend(g.skill.name),
                     )
                     for g in skill_gaps
                 ],
@@ -431,6 +514,32 @@ class ListClustersUseCase:
         ]
 
 
+MOCK_TRENDS = {
+    "react": "growing",
+    "python": "growing",
+    "docker": "growing",
+    "kubernetes": "growing",
+    "aws": "growing",
+    "cloud computing": "growing",
+    "typescript": "growing",
+    "machine learning": "growing",
+    "inteligencia artificial": "growing",
+    "devops": "growing",
+    "microservicios": "growing",
+    "scrum": "stable",
+    "sql": "stable",
+    "git": "stable",
+    "comunicación": "stable",
+    "liderazgo": "stable",
+    "cobol": "shrinking",
+    "jquery": "shrinking",
+}
+
+def determine_trend(name: str) -> str:
+    norm_name = name.lower().strip()
+    return MOCK_TRENDS.get(norm_name, "stable")
+
+
 # === Helpers ===
 
 
@@ -447,7 +556,13 @@ Extract the following details from the CV text in a structured JSON format:
 7. Work experience (work_experience: list of objects with company, role, description, start_date, end_date, current (bool))
 8. Education (education: list of objects with institution, degree, start_date, end_date)
 9. Certifications (certifications: list of objects with name, issuer, date)
-10. Technical & Soft Skills (skills: object containing lists of skills categorized under 'technical' (e.g. Python, React, SQL), 'soft' (e.g. Liderazgo), 'tools' (e.g. Docker, GitHub, AWS, Jira), and 'methodologies' (e.g. Scrum, CI/CD))
+10. Technical & Soft Skills (skills: list of objects). For EACH skill mentioned in the CV (either explicitly or contextually inferred from job description tasks/projects/certifications), identify:
+    - name (the name of the skill, e.g., Python, Docker, Scrum, Liderazgo)
+    - category (one of: 'technical', 'soft', 'tools', 'methodologies')
+    - self_taught (boolean: true if the CV mentions taking courses, bootcamps, or learning this self-taught/autodidacta)
+    - personal_projects (boolean: true if the skill is used in personal projects or open source contributions mentioned in the CV)
+    - years_of_experience (integer: the number of years the candidate has used this skill in work experience)
+    - has_certification (boolean: true if there is an official certification in the CV matching this skill)
 
 CV Text:
 {cv_text}
@@ -485,12 +600,16 @@ Respond ONLY with a valid JSON object matching this schema:
       "date": "string or null"
     }}
   ],
-  "skills": {{
-    "technical": ["string"],
-    "soft": ["string"],
-    "tools": ["string"],
-    "methodologies": ["string"]
-  }}
+  "skills": [
+    {{
+      "name": "string",
+      "category": "technical | soft | tools | methodologies",
+      "self_taught": boolean,
+      "personal_projects": boolean,
+      "years_of_experience": integer,
+      "has_certification": boolean
+    }}
+  ]
 }}"""
 
 
@@ -718,6 +837,7 @@ class NormalizeSkillsUseCase:
 def compute_affinities_and_domains(
     detected_skills: list[Skill],
     active_clusters: list[TechCluster],
+    skill_trends: dict[str, float] | None = None,
 ) -> tuple[
     ClusterAffinity | None, list[ClusterAffinity], list[ClusterAffinity], list[DomainAffinityDTO]
 ]:
@@ -753,7 +873,9 @@ def compute_affinities_and_domains(
             f_s = cluster_tech_norms[norm_name].frequency if in_cluster else 1.0
 
             if in_user and in_cluster:
-                numerator += w * f_s
+                # Evidence-based Jaccard: scale by the user's proficiency (ICT score / 10.0)
+                user_score = user_tech_norms[norm_name].ict_score / 10.0
+                numerator += w * f_s * user_score
                 denominator += w * f_s
                 matched_skills.append(cluster_tech_norms[norm_name].name)
             elif in_cluster:
@@ -762,11 +884,16 @@ def compute_affinities_and_domains(
 
                 partial_match_score = 0.0
                 if cluster_domains:
-                    for u_skill in user_tech_skills:
-                        if set(u_skill.domain_tags) & cluster_domains:
-                            partial_match_score = 0.3  # Give 30% credit for shared domain
-                            partial_matches.append((cluster_skill.name, u_skill.name))
-                            break
+                    # Find the user's best matching alternative skill in same domain
+                    alternative_skills = [
+                        u for u in user_tech_skills
+                        if set(u.domain_tags) & cluster_domains
+                    ]
+                    if alternative_skills:
+                        best_alt = max(alternative_skills, key=lambda u: u.ict_score)
+                        # Scale partial credit (30%) by the alternative's proficiency
+                        partial_match_score = 0.3 * (best_alt.ict_score / 10.0)
+                        partial_matches.append((cluster_skill.name, best_alt.name))
 
                 if partial_match_score == 0.0:
                     missing_skills.append(cluster_skill.name)
@@ -774,7 +901,8 @@ def compute_affinities_and_domains(
                 numerator += (w * f_s) * partial_match_score
                 denominator += w * f_s
             else:
-                denominator += w * 1.0
+                user_score = user_tech_norms[norm_name].ict_score / 10.0
+                denominator += w * user_score
 
         score = (numerator / denominator) if denominator > 0.0 else 0.0
 
@@ -802,7 +930,12 @@ def compute_affinities_and_domains(
             if skill.normalized_name in user_all_norms:
                 cluster_detected_skills.append(skill)
             else:
-                priority = skill.weight * skill.frequency
+                # Apply Mittas temporal trend multiplier to the priority score if available
+                trend_multiplier = 1.0
+                if skill_trends and skill.normalized_name in skill_trends:
+                    trend_multiplier = skill_trends[skill.normalized_name]
+
+                priority = skill.weight * skill.frequency * trend_multiplier
                 if priority >= 2.0:
                     importance = "critical"
                 elif priority >= 1.0:
@@ -906,33 +1039,117 @@ class GetKnowledgeGraphUseCase:
         self._skills = skill_repository
         self._profiles = profile_repository
 
-    async def execute(self, user_id: UUID | None = None) -> Any:
+    async def execute(self, user_id: UUID | None = None, cluster_name: str | None = None) -> Any:
         from src.ml_engine.application.dtos import GraphLinkDTO, GraphNodeDTO, GraphResponseDTO
 
-        # 1. Fetch all skills
+        # When the user is authenticated, build a focused graph scoped to their
+        # own detected skills and gaps. This avoids loading the entire skill
+        # catalog (potentially thousands of rows) which causes request timeouts.
+        # The unauthenticated path (global explorer) still loads all skills.
+        if user_id:
+            return await self._build_user_graph(user_id, cluster_name, GraphNodeDTO, GraphLinkDTO, GraphResponseDTO)
+
+        # --- Unauthenticated / global explorer path (full catalog) ---
         all_skills = await self._skills.get_all_skills()
 
-        # 2. Get user's acquired skills and gaps if user_id is provided
-        user_acquired_names = set()
-        user_gap_names = set()
+        nodes = [
+            GraphNodeDTO(
+                id=s.normalized_name,
+                label=s.name,
+                group=s.nature.value if hasattr(s, "nature") and s.nature else "tech",
+                domains=s.domain_tags if hasattr(s, "domain_tags") and s.domain_tags else [],
+                status="neutral",
+            )
+            for s in all_skills
+        ]
 
-        if user_id:
-            profile = await self._profiles.get_by_user_id(user_id)
-            if profile:
-                for s in profile.detected_skills:
-                    user_acquired_names.add(s.normalized_name)
-                for g in profile.skill_gaps:
-                    user_gap_names.add(g.skill.normalized_name)
-
-        # 3. Build Nodes
-        nodes = []
+        # Build links only from explicit relations (skip O(N²) implicit domain links for global view)
+        skill_by_id = {s.id: s for s in all_skills if s.id}
+        links = []
         for s in all_skills:
-            status = "neutral"
-            if s.normalized_name in user_acquired_names:
-                status = "acquired"
-            elif s.normalized_name in user_gap_names:
-                status = "gap"
+            if hasattr(s, "relations") and s.relations:
+                for rel in s.relations:
+                    target = skill_by_id.get(rel.target_skill_id)
+                    if target:
+                        links.append(
+                            GraphLinkDTO(
+                                source=s.normalized_name,
+                                target=target.normalized_name,
+                                value=2.0,
+                                type=f"explicit_{rel.relation_type}",
+                            )
+                        )
 
+        return GraphResponseDTO(nodes=nodes, links=links)
+
+    async def _build_user_graph(
+        self,
+        user_id: UUID,
+        cluster_name: str | None,
+        GraphNodeDTO: type,
+        GraphLinkDTO: type,
+        GraphResponseDTO: type,
+    ) -> Any:
+        """Build a knowledge graph scoped to a user's detected skills and skill gaps.
+
+        Fetches only the user's profile data (a tiny, bounded set) rather than
+        the full skill catalog, making this O(1) in catalog size.
+        If cluster_name is provided, scopes the skills to that specific cluster.
+        """
+        profile = await self._profiles.get_by_user_id(user_id)
+
+        if not profile:
+            return GraphResponseDTO(nodes=[], links=[])
+
+        if cluster_name:
+            target_affinity = None
+            if profile.primary_affinity and profile.primary_affinity.cluster_name == cluster_name:
+                target_affinity = profile.primary_affinity
+            else:
+                for a in profile.secondary_affinities:
+                    if a.cluster_name == cluster_name:
+                        target_affinity = a
+                        break
+
+            if target_affinity:
+                acquired = {s.normalized_name: s for s in target_affinity.detected_skills}
+                gaps = {g.skill.normalized_name: g.skill for g in target_affinity.skill_gaps}
+                neutral = {s.normalized_name: s for s in profile.detected_skills if s.normalized_name not in acquired}
+            else:
+                acquired = {s.normalized_name: s for s in profile.detected_skills}
+                gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
+                neutral = {}
+        else:
+            acquired = {s.normalized_name: s for s in profile.detected_skills}
+            gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
+            neutral = {}
+
+        # Fetch all non-ESCO skills to render as the general market backdrop
+        non_esco_skills = await self._skills.get_non_esco_skills()
+        market = {
+            s.normalized_name: s for s in non_esco_skills 
+            if s.normalized_name not in acquired 
+            and s.normalized_name not in gaps 
+            and s.normalized_name not in neutral
+        }
+
+        all_skills_to_render = list(acquired.values()) + list(gaps.values()) + list(neutral.values()) + list(market.values())
+
+        # Deduplicate (a skill can appear in both acquired and gaps due to partial overlap)
+        seen: set[str] = set()
+        nodes = []
+        for s in all_skills_to_render:
+            if s.normalized_name in seen:
+                continue
+            seen.add(s.normalized_name)
+            if s.normalized_name in acquired:
+                status = "acquired"
+            elif s.normalized_name in gaps:
+                status = "gap"
+            elif s.normalized_name in neutral:
+                status = "neutral"
+            else:
+                status = "market"
             nodes.append(
                 GraphNodeDTO(
                     id=s.normalized_name,
@@ -943,42 +1160,17 @@ class GetKnowledgeGraphUseCase:
                 )
             )
 
-        # 4. Build Links
-        links = []
-        # Explicit links (relations)
-        # Note: Depending on whether relations are eager loaded, we might need to access them safely.
-        for s in all_skills:
-            if hasattr(s, "relations") and s.relations:
-                for rel in s.relations:
-                    # Resolve target name
-                    target_skill = next(
-                        (ts for ts in all_skills if ts.id == rel.target_skill_id), None
-                    )
-                    if target_skill:
-                        links.append(
-                            GraphLinkDTO(
-                                source=s.normalized_name,
-                                target=target_skill.normalized_name,
-                                value=2.0,
-                                type=f"explicit_{rel.relation_type}",
-                            )
-                        )
-
-        # Implicit links (shared domains)
-        # To avoid a dense O(N^2) graph, we only link skills that share a domain IF one is acquired and one is a gap
-        # Or we can link them if they are in the same domain. Let's create a lightweight domain-based linking.
+        # Build implicit links between skills that share a domain tag
         domain_map: dict[str, list[str]] = {}
-        for s in all_skills:
+        for s in all_skills_to_render:
             if hasattr(s, "domain_tags") and s.domain_tags:
                 for d in s.domain_tags:
-                    if d not in domain_map:
-                        domain_map[d] = []
-                    domain_map[d].append(s.normalized_name)
+                    domain_map.setdefault(d, [])
+                    if s.normalized_name not in domain_map[d]:
+                        domain_map[d].append(s.normalized_name)
 
+        links = []
         for skill_names in domain_map.values():
-            # For each domain, we can create a central node for the domain, or just fully connect them
-            # Let's fully connect them but with low value.
-            # To limit edges, let's just connect consecutive nodes in the domain
             for i in range(len(skill_names) - 1):
                 links.append(
                     GraphLinkDTO(
@@ -1048,7 +1240,26 @@ class GetMyProfileUseCase:
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
-            return None
+            from src.ml_engine.domain.entities import UserProfile, ClusterAffinity, SeniorityLevel
+            empty_profile = UserProfile(
+                user_id=user_id,
+                cv_id=None,
+                embedding=[],
+                detected_skills=[],
+                seniority=SeniorityLevel.MID,
+                primary_affinity=ClusterAffinity(
+                    cluster_id=None,
+                    cluster_name="Sin Diagnóstico",
+                    affinity_score=0.0,
+                    is_primary=True,
+                ),
+                secondary_affinities=[],
+                skill_gaps=[],
+            )
+            await self._profiles.save(empty_profile)
+            profile = await self._profiles.get_by_user_id(user_id)
+            if not profile:
+                return None
 
         active_clusters = await self._clusters.get_all_active()
         active_clusters = [c for c in active_clusters if c.centroid_skills]
@@ -1058,6 +1269,8 @@ class GetMyProfileUseCase:
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
         all_affinities = [primary] + secondaries if primary.cluster_name != "Sin Diagnóstico" else []
+
+        user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
 
         return UserProfileDTO(
             user_id=profile.user_id,
@@ -1088,6 +1301,12 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
+                            self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
+                            personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
+                            years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
+                            has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
+                            ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                            trend=determine_trend(s.name),
                         )
                         for s in a.detected_skills
                     ],
@@ -1099,6 +1318,7 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(g.skill.frequency * 100)
                             if g.skill.frequency is not None
                             else None,
+                            trend=determine_trend(g.skill.name),
                         )
                         for g in a.skill_gaps
                     ],
@@ -1128,6 +1348,12 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
+                            self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
+                            personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
+                            years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
+                            has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
+                            ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                            trend=determine_trend(s.name),
                         )
                         for s in a.detected_skills
                     ],
@@ -1139,6 +1365,7 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(g.skill.frequency * 100)
                             if g.skill.frequency is not None
                             else None,
+                            trend=determine_trend(g.skill.name),
                         )
                         for g in a.skill_gaps
                     ],
@@ -1154,6 +1381,12 @@ class GetMyProfileUseCase:
                     market_demand_percentage=round(s.frequency * 100)
                     if s.frequency is not None
                     else 100,
+                    self_taught=s.self_taught,
+                    personal_projects=s.personal_projects,
+                    years_of_experience=s.years_of_experience,
+                    has_certification=s.has_certification,
+                    ict_score=s.ict_score,
+                    trend=determine_trend(s.name),
                 )
                 for s in profile.detected_skills
             ],
@@ -1165,6 +1398,7 @@ class GetMyProfileUseCase:
                     market_demand_percentage=round(g.skill.frequency * 100)
                     if g.skill.frequency is not None
                     else None,
+                    trend=determine_trend(g.skill.name),
                 )
                 for g in profile.skill_gaps
             ],
@@ -1194,6 +1428,7 @@ class EvaluateClusterDiagnosticUseCase:
 
     async def execute(self, user_id: UUID, cluster_name: str) -> UserProfileDTO | None:
         from dataclasses import replace
+
         from fastapi import HTTPException
 
         profile = await self._profiles.get_by_user_id(user_id)

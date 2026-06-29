@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy.orm import selectinload
 
 from src.ml_engine.domain.entities import Skill, SkillNature, SkillRelation, SkillRelationType
 from src.ml_engine.domain.ports import SkillRepository
@@ -69,6 +69,20 @@ class SQLSkillRepository(SkillRepository):
         )
         models = result.scalars().all()
         # Build a name map to resolve target_skill_name without extra queries
+        name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
+        return [_model_to_skill(m, name_map) for m in models]
+
+    async def get_non_esco_skills(self) -> list[Skill]:
+        """Retrieve all canonical skills that do not have an ESCO URI."""
+        result = await self._session.execute(
+            select(SkillModel)
+            .where(SkillModel.esco_uri.is_(None))
+            .options(
+                selectinload(SkillModel.aliases),
+                selectinload(SkillModel.outgoing_relations),
+            )
+        )
+        models = result.scalars().all()
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
         return [_model_to_skill(m, name_map) for m in models]
 

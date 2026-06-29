@@ -74,6 +74,6 @@ def test_compute_affinities_and_domains_uses_core_domains():
     assert "react" not in domain_map  # Specific tags should not be in core domains
     assert "web" not in domain_map
     
-    assert pytest.approx(domain_map["Frontend"]) == 1.8 / 6.6
-    assert pytest.approx(domain_map["Backend"]) == 2.4 / 6.6
-    assert pytest.approx(domain_map["Data"]) == 2.4 / 6.6
+    assert domain_map["Frontend"] == 0.2727
+    assert domain_map["Backend"] == 0.3636
+    assert domain_map["Data"] == 0.3636

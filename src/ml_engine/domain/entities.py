@@ -33,6 +33,8 @@ class SkillRelationType(StrEnum):
     REQUIRES = "requires"
     ALTERNATIVE_TO = "alternative_to"
     BELONGS_TO = "belongs_to"
+    ESSENTIAL = "essential"
+    OPTIONAL = "optional"
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,19 @@ class Skill:
     # Contains the canonical names of child skills that triggered this inference
     # (e.g. ["PostgreSQL"] when SQL is inferred because the CV mentions PostgreSQL).
     inferred_from: list[str] = field(default_factory=list)
+    # Evidence and proficiency level
+    self_taught: bool = False
+    personal_projects: bool = False
+    years_of_experience: int = 0
+    has_certification: bool = False
+    ict_score: float = 0.0
+
+    def calculate_ict(self) -> float:
+        exp_points = 3 * self.years_of_experience
+        cert_points = 4 if self.has_certification else 0
+        projects_points = 2 if self.personal_projects else 0
+        self_taught_points = 1 if self.self_taught else 0
+        return float(min(10.0, self_taught_points + projects_points + exp_points + cert_points))
 
 
 @dataclass(frozen=True)

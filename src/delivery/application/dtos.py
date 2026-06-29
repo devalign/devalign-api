@@ -23,6 +23,7 @@ class CVUploadResultDTO(BaseModel):
     storage_path: str
     original_filename: str
     size_bytes: int
+    status: str = "processing"
     download_url: str | None = None
     uploaded_at: datetime | None = None
     message: str = "CV uploaded successfully"

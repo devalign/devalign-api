@@ -53,6 +53,11 @@ class CVRepository(ABC):
         """Delete a CV document record."""
         ...
 
+    @abstractmethod
+    async def update_status(self, cv_id: UUID, status: str) -> None:
+        """Update the processing status of a CV document."""
+        ...
+
 
 class StorageService(ABC):
     """Port for file storage operations."""
