@@ -2,9 +2,9 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, File, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
-from src.delivery.application.dtos import CVListDTO, CVUploadResultDTO, UserProfileDTO
+from src.delivery.application.dtos import CVListDTO, CVStatusDTO, CVUploadResultDTO
 from src.delivery.application.use_cases import (
     DeleteCVUseCase,
     GetCurrentUserUseCase,
@@ -15,10 +15,17 @@ from src.delivery.application.use_cases import (
 from src.delivery.infrastructure.repository import SQLAlchemyCVRepository, SQLAlchemyUserRepository
 from src.delivery.infrastructure.supabase_storage import SupabaseStorageService
 from src.dependencies import SessionDep
+from src.ml_engine.application.dtos import ProfileUpdateDTO
+
+# ML Engine imports for profile unifications
+from src.ml_engine.application.dtos import UserProfileDTO as MLUserProfileDTO
+from src.ml_engine.application.use_cases import GetMyProfileUseCase
+from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
 from src.shared.security import CurrentUserIdDep, CurrentUserPayloadDep
 from src.shared.supabase_client import get_supabase_admin_client
 
-router = APIRouter(prefix="/users", tags=["Users & CV"])
+router = APIRouter(prefix="/me", tags=["User Portal — Profile & CV"])
 
 
 def _get_upload_cv_use_case(session: SessionDep) -> UploadCVUseCase:
@@ -36,22 +43,18 @@ def _get_list_cvs_use_case(session: SessionDep) -> ListUserCVsUseCase:
     )
 
 
-@router.get("/me", response_model=UserProfileDTO, summary="Get current user profile")
+@router.get("", response_model=MLUserProfileDTO, summary="Get current user profile")
 async def get_me(
     payload: CurrentUserPayloadDep,
     session: SessionDep,
-) -> UserProfileDTO:
+) -> MLUserProfileDTO:
     """
-    Returns the profile of the currently authenticated user.
-
-    Requires a valid Supabase JWT Bearer token.
-    If the user does not exist locally, they will be provisioned JIT (Just-In-Time)
-    using metadata extracted from the JWT payload.
+    Returns the computed profile of the currently authenticated developer.
+    If no CV is analyzed yet, returns a profile draft with basic details.
     """
     user_id = UUID(str(payload.get("sub")))
     email = str(payload.get("email") or "")
 
-    # Extract identity metadata safely
     user_metadata = payload.get("user_metadata")
     if not isinstance(user_metadata, dict):
         user_metadata = {}
@@ -59,17 +62,83 @@ async def get_me(
     full_name = str(user_metadata.get("full_name") or user_metadata.get("name") or "") or None
     avatar_url = str(user_metadata.get("avatar_url") or user_metadata.get("picture") or "") or None
 
-    use_case = GetCurrentUserUseCase(SQLAlchemyUserRepository(session))
-    return await use_case.execute(
-        user_id=user_id,
-        email=email,
-        full_name=full_name,
-        avatar_url=avatar_url,
-    )
+    # JIT Provisioning (ensure UserModel exists)
+    user_repo = SQLAlchemyUserRepository(session)
+    user_model = await user_repo.get_by_id(user_id)
+    if not user_model:
+        user_use_case = GetCurrentUserUseCase(user_repo)
+        user_model = await user_use_case.execute(
+            user_id=user_id,
+            email=email,
+            full_name=full_name,
+            avatar_url=avatar_url,
+        )
+
+    # Fetch profile from ML Engine
+    repo = SQLUserProfileRepository(session)
+    cluster_repo = SQLClusterRepository(session)
+    use_case = GetMyProfileUseCase(repo, cluster_repo)
+    dto = await use_case.execute(user_id)
+
+    if not dto:
+        # Fallback to basic user profile if no CV analyzed yet
+        return MLUserProfileDTO(
+            user_id=user_id,
+            cv_id=None,
+            seniority="mid",
+            primary_specialty="Software Engineering",
+            alignment_score=0.0,
+            full_name=user_model.full_name,
+            message="No profile found. Please upload a CV first."
+        )
+
+    return dto
+
+
+@router.patch("", response_model=MLUserProfileDTO, summary="Update manual fields of developer profile")
+async def update_my_profile(
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+    data: ProfileUpdateDTO,
+) -> MLUserProfileDTO:
+    """
+    Manually update profile details (location, modality, availability, experience lists).
+    """
+    from dataclasses import replace
+
+    repo = SQLUserProfileRepository(session)
+    profile = await repo.get_by_user_id(UUID(current_user_id))
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+
+    kwargs = {}
+    for field in [
+        "full_name",
+        "current_job_role",
+        "years_experience",
+        "preferred_modality",
+        "location",
+        "availability",
+        "work_experience",
+        "education",
+        "certifications",
+    ]:
+        val = getattr(data, field)
+        if val is not None:
+            kwargs[field] = val
+
+    updated_profile = replace(profile, **kwargs)
+    await repo.save(updated_profile)
+
+    cluster_repo = SQLClusterRepository(session)
+    dto = await GetMyProfileUseCase(repo, cluster_repo).execute(UUID(current_user_id))
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after update")
+    return dto
 
 
 @router.post(
-    "/me/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document"
+    "/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document"
 )
 async def upload_cv(
     current_user_id: CurrentUserIdDep,
@@ -79,10 +148,6 @@ async def upload_cv(
 ) -> CVUploadResultDTO:
     """
     Upload a CV document for processing.
-
-    - Accepts PDF and DOCX formats
-    - Maximum file size: 5MB
-    - The CV will be stored securely and used for profile analysis
     """
     content = await file.read()
     use_case = _get_upload_cv_use_case(session)
@@ -126,7 +191,6 @@ async def run_profile_analysis_task(
 
     try:
         async with AsyncSessionLocal() as session:
-            # Explicitly set status to processing (necessary for reanalyze)
             cv_repo = SQLAlchemyCVRepository(session)
             await cv_repo.update_status(cv_id, "processing")
             await session.commit()
@@ -144,7 +208,6 @@ async def run_profile_analysis_task(
                 cv_content=content,
                 content_type=content_type,
             )
-            # Mark CV processing as completed
             await cv_repo.update_status(cv_id, "completed")
             await session.commit()
             bg_logger.info("Background CV analysis completed successfully", user_id=str(user_id))
@@ -156,10 +219,31 @@ async def run_profile_analysis_task(
                 await cv_repo.update_status(cv_id, "failed")
                 await fail_session.commit()
         except Exception as db_exc:
-            bg_logger.exception("Failed to update CV status to failed in database", user_id=str(user_id), error=str(db_exc))
+            bg_logger.exception("Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc))
 
 
-@router.get("/me/cvs", response_model=CVListDTO, summary="List uploaded CVs")
+@router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
+async def get_cv_status(
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> CVStatusDTO:
+    """Gets the status of the latest CV uploaded by the user."""
+    cv_repo = SQLAlchemyCVRepository(session)
+    cvs = await cv_repo.get_by_user_id(UUID(current_user_id))
+    if not cvs:
+        return CVStatusDTO(cv_id=None, status="none")
+
+    cvs.sort(key=lambda x: x.uploaded_at, reverse=True)
+    latest_cv = cvs[0]
+
+    return CVStatusDTO(
+        cv_id=latest_cv.id,
+        status=latest_cv.status,
+        uploaded_at=latest_cv.uploaded_at
+    )
+
+
+@router.get("/cvs", response_model=CVListDTO, summary="List uploaded CVs")
 async def list_cvs(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
@@ -170,7 +254,7 @@ async def list_cvs(
 
 
 @router.post(
-    "/me/cvs/{cv_id}/reanalyze",
+    "/cvs/{cv_id}/reanalyze",
     response_model=CVUploadResultDTO,
     summary="Re-analyze an existing CV",
 )
@@ -182,10 +266,7 @@ async def reanalyze_cv(
 ) -> CVUploadResultDTO:
     """
     Triggers background re-analysis of a CV that was previously uploaded.
-    This will overwrite the user's current profile with the details extracted from this CV.
     """
-    from fastapi import HTTPException
-
     cv_repo = SQLAlchemyCVRepository(session)
     cv = await cv_repo.get_by_id(cv_id)
     if not cv or str(cv.user_id) != current_user_id:
@@ -194,7 +275,6 @@ async def reanalyze_cv(
     storage_service = SupabaseStorageService(get_supabase_admin_client())
     content = await storage_service.download_cv(cv.storage_path)
 
-    # Queue background task to run profile analysis
     background_tasks.add_task(
         run_profile_analysis_task,
         user_id=cv.user_id,
@@ -227,7 +307,7 @@ def _get_delete_cv_use_case(session: SessionDep) -> DeleteCVUseCase:
 
 
 @router.delete(
-    "/me/cvs/{cv_id}",
+    "/cvs/{cv_id}",
     status_code=204,
     summary="Delete a CV from version history",
 )
@@ -236,10 +316,6 @@ async def delete_cv(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
 ) -> None:
-    """
-    Deletes a specific CV from the user's history.
-    If the CV is the active one, the user profile's active CV reference will be set to null.
-    """
     use_case = _get_delete_cv_use_case(session)
     await use_case.execute(
         user_id=UUID(current_user_id),
@@ -248,7 +324,7 @@ async def delete_cv(
 
 
 @router.post(
-    "/me/reset",
+    "/reset",
     status_code=204,
     summary="Reset user account data",
 )
@@ -256,12 +332,6 @@ async def reset_account(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
 ) -> None:
-    """
-    Permanently deletes all CV documents, storage files, and computed developer profile data
-    associated with the authenticated user. Keep the user account active.
-    """
-    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
-
     use_case = ResetAccountUseCase(
         cv_repository=SQLAlchemyCVRepository(session),
         profile_repository=SQLUserProfileRepository(session),
@@ -271,7 +341,7 @@ async def reset_account(
 
 
 @router.delete(
-    "/me",
+    "",
     status_code=204,
     summary="Permanently delete user account",
 )
@@ -279,20 +349,12 @@ async def delete_account(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
 ) -> None:
-    """
-    Permanently deletes all user data and the user account itself from the system and identity provider.
-    """
-    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
-    
-    # 1. Reset all local data (CVs, profile, storage)
     use_case = ResetAccountUseCase(
         cv_repository=SQLAlchemyCVRepository(session),
         profile_repository=SQLUserProfileRepository(session),
         storage_service=SupabaseStorageService(get_supabase_admin_client()),
     )
     await use_case.execute(UUID(current_user_id))
-    
-    # 2. Delete user from Supabase Auth
+
     admin_client = get_supabase_admin_client()
     admin_client.auth.admin.delete_user(current_user_id)
-

@@ -35,3 +35,13 @@ class CVListDTO(BaseModel):
     user_id: UUID
     cvs: list[CVUploadResultDTO]
     total: int
+
+
+class CVStatusDTO(BaseModel):
+    """Status of active CV processing."""
+
+    cv_id: UUID | None = None
+    status: str | None = None
+    uploaded_at: datetime | None = None
+    error_message: str | None = None
+

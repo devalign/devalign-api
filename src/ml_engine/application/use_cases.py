@@ -1127,9 +1127,9 @@ class GetKnowledgeGraphUseCase:
         # Fetch all non-ESCO skills to render as the general market backdrop
         non_esco_skills = await self._skills.get_non_esco_skills()
         market = {
-            s.normalized_name: s for s in non_esco_skills 
-            if s.normalized_name not in acquired 
-            and s.normalized_name not in gaps 
+            s.normalized_name: s for s in non_esco_skills
+            if s.normalized_name not in acquired
+            and s.normalized_name not in gaps
             and s.normalized_name not in neutral
         }
 
@@ -1240,7 +1240,7 @@ class GetMyProfileUseCase:
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
-            from src.ml_engine.domain.entities import UserProfile, ClusterAffinity, SeniorityLevel
+            from src.ml_engine.domain.entities import ClusterAffinity, SeniorityLevel, UserProfile
             empty_profile = UserProfile(
                 user_id=user_id,
                 cv_id=None,
