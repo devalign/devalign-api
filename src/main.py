@@ -1,11 +1,13 @@
 """Devalign API — Application entry point."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.config import settings
 
@@ -14,10 +16,14 @@ from src.delivery.interface.router import router as delivery_router
 from src.ml_engine.interface.router import admin_router, market_router, me_router
 from src.scraper.interface.router import router as scraper_router
 from src.shared.database import engine
+from src.shared.exceptions import DevalignException
 from src.shared.logging import configure_logging
 from src.shared.middleware import RequestLoggingMiddleware
 
 logger = structlog.get_logger(__name__)
+
+# Keep strong references to background tasks to prevent garbage collection
+BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -31,12 +37,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version=settings.VERSION,
     )
 
-    import asyncio
-
-    async def prewarm_cache():
+    async def prewarm_cache() -> None:
         try:
             from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
             from src.shared.database import AsyncSessionLocal
+
             logger.info("Pre-warming cluster cache in background...")
             async with AsyncSessionLocal() as session:
                 await SQLClusterRepository(session).get_all_active()
@@ -44,7 +49,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.error("Failed to pre-warm cluster cache", error=str(e))
 
-    asyncio.create_task(prewarm_cache())
+    task = asyncio.create_task(prewarm_cache())
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
 
     yield
     # Shutdown
@@ -89,6 +96,14 @@ def create_app() -> FastAPI:
     async def health_check() -> dict[str, str]:
         """Service health check endpoint."""
         return {"status": "healthy", "version": settings.VERSION, "env": settings.APP_ENV}
+
+    # === Exception Handlers ===
+    @app.exception_handler(DevalignException)
+    async def devalign_exception_handler(request: Request, exc: DevalignException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
 
     return app
 

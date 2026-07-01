@@ -6,10 +6,7 @@ from collections.abc import Callable
 
 import structlog
 from fastapi import Request, Response
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-
-from src.shared.exceptions import DevalignException
 
 logger = structlog.get_logger(__name__)
 
@@ -33,29 +30,14 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         try:
             response: Response = await call_next(request)
-        except DevalignException as exc:
-            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            logger.warning(
-                "Request failed with known error",
-                status_code=exc.status_code,
-                detail=exc.detail,
-                duration_ms=duration_ms,
-            )
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"detail": exc.detail, "request_id": request_id},
-            )
         except Exception as exc:
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             logger.exception(
-                "Unhandled exception",
+                "Unhandled exception propagated to logging middleware",
                 duration_ms=duration_ms,
                 exc_info=exc,
             )
-            return JSONResponse(
-                status_code=500,
-                content={"detail": "Internal server error", "request_id": request_id},
-            )
+            raise
 
         duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
         logger.info(

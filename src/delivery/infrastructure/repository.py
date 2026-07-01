@@ -108,8 +108,6 @@ class SQLAlchemyCVRepository(CVRepository):
 
     async def update_status(self, cv_id: UUID, status: str) -> None:
         await self._session.execute(
-            update(CVDocumentModel)
-            .where(CVDocumentModel.id == cv_id)
-            .values(status=status)
+            update(CVDocumentModel).where(CVDocumentModel.id == cv_id).values(status=status)
         )
         await self._session.flush()

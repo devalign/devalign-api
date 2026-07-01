@@ -65,14 +65,17 @@ async def get_me(
     # JIT Provisioning (ensure UserModel exists)
     user_repo = SQLAlchemyUserRepository(session)
     user_model = await user_repo.get_by_id(user_id)
-    if not user_model:
+    if user_model:
+        user_full_name = user_model.full_name
+    else:
         user_use_case = GetCurrentUserUseCase(user_repo)
-        user_model = await user_use_case.execute(
+        user_profile_dto = await user_use_case.execute(
             user_id=user_id,
             email=email,
             full_name=full_name,
             avatar_url=avatar_url,
         )
+        user_full_name = user_profile_dto.full_name
 
     # Fetch profile from ML Engine
     repo = SQLUserProfileRepository(session)
@@ -88,14 +91,16 @@ async def get_me(
             seniority="mid",
             primary_specialty="Software Engineering",
             alignment_score=0.0,
-            full_name=user_model.full_name,
-            message="No profile found. Please upload a CV first."
+            full_name=user_full_name,
+            message="No profile found. Please upload a CV first.",
         )
 
     return dto
 
 
-@router.patch("", response_model=MLUserProfileDTO, summary="Update manual fields of developer profile")
+@router.patch(
+    "", response_model=MLUserProfileDTO, summary="Update manual fields of developer profile"
+)
 async def update_my_profile(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
@@ -137,9 +142,7 @@ async def update_my_profile(
     return dto
 
 
-@router.post(
-    "/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document"
-)
+@router.post("/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document")
 async def upload_cv(
     current_user_id: CurrentUserIdDep,
     session: SessionDep,
@@ -219,7 +222,9 @@ async def run_profile_analysis_task(
                 await cv_repo.update_status(cv_id, "failed")
                 await fail_session.commit()
         except Exception as db_exc:
-            bg_logger.exception("Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc))
+            bg_logger.exception(
+                "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
+            )
 
 
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
@@ -237,9 +242,7 @@ async def get_cv_status(
     latest_cv = cvs[0]
 
     return CVStatusDTO(
-        cv_id=latest_cv.id,
-        status=latest_cv.status,
-        uploaded_at=latest_cv.uploaded_at
+        cv_id=latest_cv.id, status=latest_cv.status, uploaded_at=latest_cv.uploaded_at
     )
 
 

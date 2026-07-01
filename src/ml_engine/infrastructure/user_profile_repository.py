@@ -162,7 +162,9 @@ class SQLUserProfileRepository(UserProfileRepository):
             db_profile_skills_result = await self._session.execute(
                 select(SkillModel).where(SkillModel.name.in_(profile_skill_names))
             )
-            db_profile_skills = {m.name.lower(): m for m in db_profile_skills_result.scalars().all()}
+            db_profile_skills = {
+                m.name.lower(): m for m in db_profile_skills_result.scalars().all()
+            }
 
         for skill in profile.detected_skills:
             norm_name = skill.name.lower()
@@ -182,7 +184,9 @@ class SQLUserProfileRepository(UserProfileRepository):
 
         # Delete existing profile_skills relations
         await self._session.execute(
-            delete(ProfileSkillModel).where(ProfileSkillModel.profile_id == profile_model.profile_id)
+            delete(ProfileSkillModel).where(
+                ProfileSkillModel.profile_id == profile_model.profile_id
+            )
         )
         await self._session.flush()
 
@@ -211,9 +215,7 @@ class SQLUserProfileRepository(UserProfileRepository):
             select(ProfileModel)
             .where(ProfileModel.user_id == user_id)
             .options(
-                selectinload(ProfileModel.profile_skills).selectinload(
-                    ProfileSkillModel.skill
-                )
+                selectinload(ProfileModel.profile_skills).selectinload(ProfileSkillModel.skill)
             )
         )
         profile_model = result.scalar_one_or_none()
@@ -249,9 +251,9 @@ class SQLUserProfileRepository(UserProfileRepository):
             .where(DiagnosticModel.profile_id == profile_model.profile_id)
             .order_by(DiagnosticModel.created_at.desc())
             .options(
-                selectinload(DiagnosticModel.detected_cluster).selectinload(
-                    ClusterModel.cluster_skills
-                ).selectinload(ClusterSkillModel.skill),
+                selectinload(DiagnosticModel.detected_cluster)
+                .selectinload(ClusterModel.cluster_skills)
+                .selectinload(ClusterSkillModel.skill),
                 selectinload(DiagnosticModel.diagnostic_skills).selectinload(
                     DiagnosticSkillModel.skill
                 ),
@@ -309,7 +311,9 @@ class SQLUserProfileRepository(UserProfileRepository):
                     nature=SkillNature(ds.skill.nature) if ds.skill.nature else SkillNature.TECH,
                     normalized_name=ds.skill.name.lower().replace(" ", "").replace(".", ""),
                     weight=float(ds.skill.weight),
-                    frequency=float(ds.importance_score) if ds.importance_score is not None else 1.0,
+                    frequency=float(ds.importance_score)
+                    if ds.importance_score is not None
+                    else 1.0,
                     domain_tags=ds.skill.domain_tags or [],
                     core_domains=ds.skill.core_domains or [],
                 )
@@ -337,12 +341,22 @@ class SQLUserProfileRepository(UserProfileRepository):
                     cluster_name=dm.detected_cluster.name if dm.detected_cluster else "Unknown",
                     affinity_score=float(dm.affinity_score),
                     is_primary=False,
-                    market_insights=dm.detected_cluster.market_insights if dm.detected_cluster else None,
-                    compatible_roles=dm.detected_cluster.compatible_roles if dm.detected_cluster else None,
+                    market_insights=dm.detected_cluster.market_insights
+                    if dm.detected_cluster
+                    else None,
+                    compatible_roles=dm.detected_cluster.compatible_roles
+                    if dm.detected_cluster
+                    else None,
                     detected_skills=detected_skills,
                     skill_gaps=skill_gaps,
-                    job_offer_count=dm.detected_cluster.job_offer_count if dm.detected_cluster else 0,
-                    top_skills=[cs.skill.name for cs in dm.detected_cluster.cluster_skills[:8] if cs.skill] if dm.detected_cluster else [],
+                    job_offer_count=dm.detected_cluster.job_offer_count
+                    if dm.detected_cluster
+                    else 0,
+                    top_skills=[
+                        cs.skill.name for cs in dm.detected_cluster.cluster_skills[:8] if cs.skill
+                    ]
+                    if dm.detected_cluster
+                    else [],
                 )
             )
 
@@ -373,7 +387,9 @@ class SQLUserProfileRepository(UserProfileRepository):
             embedding=list(profile_model.cv_embedding)
             if profile_model.cv_embedding is not None
             else [],
-            detected_skills=global_detected_skills if global_detected_skills else primary_affinity.detected_skills,
+            detected_skills=global_detected_skills
+            if global_detected_skills
+            else primary_affinity.detected_skills,
             seniority=SeniorityLevel.MID,
             primary_affinity=primary_affinity,
             secondary_affinities=secondary_affinities,
@@ -392,8 +408,5 @@ class SQLUserProfileRepository(UserProfileRepository):
         )
 
     async def delete_by_user_id(self, user_id: UUID) -> None:
-        await self._session.execute(
-            delete(ProfileModel).where(ProfileModel.user_id == user_id)
-        )
+        await self._session.execute(delete(ProfileModel).where(ProfileModel.user_id == user_id))
         await self._session.flush()
-

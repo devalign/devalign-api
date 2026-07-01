@@ -154,9 +154,7 @@ class SQLSkillRepository(SkillRepository):
             )
         return saved_skills
 
-    async def add_relations(
-        self, relations: list[tuple[UUID, UUID, SkillRelationType]]
-    ) -> None:
+    async def add_relations(self, relations: list[tuple[UUID, UUID, SkillRelationType]]) -> None:
         """Persist skill-to-skill knowledge graph edges.
 
         Skips any edge where source_id == target_id or where the exact

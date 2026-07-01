@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from datetime import datetime
     from uuid import UUID
 
 
@@ -99,7 +99,7 @@ class TechCluster:
 class ClusterAffinity:
     """Affinity score between a user profile and a cluster."""
 
-    cluster_id: UUID
+    cluster_id: UUID | None
     cluster_name: str
     affinity_score: float  # Cosine similarity [0, 1]
     is_primary: bool = False
