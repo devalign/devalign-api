@@ -33,6 +33,7 @@ admin_router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 
 # === ME ROUTER ===
 
+
 @me_router.put(
     "/skills",
     response_model=UserProfileDTO,
@@ -101,9 +102,10 @@ async def update_my_skills(
 
     clusters_to_eval = []
     for diag in existing_diagnostics:
-        cluster = await cluster_repo.get_by_id(diag.cluster_id)
-        if cluster:
-            clusters_to_eval.append(cluster)
+        if diag.cluster_id is not None:
+            cluster = await cluster_repo.get_by_id(diag.cluster_id)
+            if cluster:
+                clusters_to_eval.append(cluster)
 
     if not clusters_to_eval:
         active_clusters = await cluster_repo.get_all_active()
@@ -111,6 +113,7 @@ async def update_my_skills(
 
     # Recalcular affinities
     from src.ml_engine.application.use_cases import compute_affinities_and_domains
+
     primary, secondaries, _all_affinities, _ = compute_affinities_and_domains(
         detected_skills, clusters_to_eval
     )
@@ -119,6 +122,7 @@ async def update_my_skills(
         from uuid import uuid4
 
         from src.ml_engine.domain.entities import ClusterAffinity
+
         primary = ClusterAffinity(
             cluster_id=uuid4(),
             cluster_name="Sin Diagnóstico",
@@ -129,6 +133,7 @@ async def update_my_skills(
 
     # 3. Persistir el perfil con los diagnósticos actualizados
     from dataclasses import replace
+
     updated_profile = replace(
         profile,
         detected_skills=detected_skills,
@@ -140,6 +145,7 @@ async def update_my_skills(
 
     # 4. Devolver perfil actualizado
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
+
     dto = await GetMyProfileUseCase(repo, cluster_repo).execute(UUID(current_user_id))
     if not dto:
         raise HTTPException(status_code=404, detail="Profile not found after update")
@@ -196,6 +202,7 @@ async def get_cluster_diagnostic(
 
 # === MARKET ROUTER ===
 
+
 @market_router.get(
     "/clusters",
     response_model=list[ClusterDTO],
@@ -236,6 +243,7 @@ async def get_skills_graph(
 
 
 # === ADMIN ROUTER ===
+
 
 @admin_router.post(
     "/skills/normalize",

@@ -1,5 +1,6 @@
 """Devalign API — Application entry point."""
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -22,7 +23,7 @@ from src.shared.middleware import RequestLoggingMiddleware
 logger = structlog.get_logger(__name__)
 
 # Keep strong references to background tasks to prevent garbage collection
-BACKGROUND_TASKS = set()
+BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
 @asynccontextmanager
@@ -36,12 +37,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         version=settings.VERSION,
     )
 
-    import asyncio
-
-    async def prewarm_cache():
+    async def prewarm_cache() -> None:
         try:
             from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
             from src.shared.database import AsyncSessionLocal
+
             logger.info("Pre-warming cluster cache in background...")
             async with AsyncSessionLocal() as session:
                 await SQLClusterRepository(session).get_all_active()

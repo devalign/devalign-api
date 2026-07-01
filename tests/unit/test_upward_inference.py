@@ -39,6 +39,7 @@ def _make_use_case(skills: list[Skill]) -> ProfileUserFromCVUseCase:
 
 # ── Helpers to build skill fixtures ─────────────────────────────────────────
 
+
 def _belongs_to(target_id, target_name: str) -> SkillRelation:
     return SkillRelation(
         target_skill_id=target_id,
@@ -75,6 +76,7 @@ def _tech(name: str, normalized: str, relations: list[SkillRelation] | None = No
 
 # ── Tests ────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_belongs_to_chain_infers_parents_recursively() -> None:
     """PostgreSQL → SQL → RDBMS: all ancestors must be inferred."""
@@ -95,10 +97,14 @@ async def test_requires_relation_infers_parent() -> None:
     """Angular requires TypeScript which requires JavaScript — all should be inferred."""
     js = _tech("JavaScript", "javascript")
     ts = _tech("TypeScript", "typescript", [_requires(js.id, js.name)])
-    angular = _tech("Angular", "angular", [
-        _requires(ts.id, ts.name),
-        _requires(js.id, js.name),
-    ])
+    angular = _tech(
+        "Angular",
+        "angular",
+        [
+            _requires(ts.id, ts.name),
+            _requires(js.id, js.name),
+        ],
+    )
 
     use_case = _make_use_case([js, ts, angular])
     result = await use_case._expand_with_upward_inference([angular])
@@ -135,9 +141,7 @@ async def test_explicitly_detected_skills_have_no_inferred_from() -> None:
     result = await use_case._expand_with_upward_inference([postgres])
 
     pg_skill = next(s for s in result if s.name == "PostgreSQL")
-    assert pg_skill.inferred_from == [], (
-        "Explicitly detected skill should have empty inferred_from"
-    )
+    assert pg_skill.inferred_from == [], "Explicitly detected skill should have empty inferred_from"
 
 
 @pytest.mark.asyncio
@@ -159,11 +163,17 @@ async def test_cycle_between_two_skills_terminates() -> None:
     """A ↔ B (both belong to each other) must terminate without infinite loop."""
     id_a, id_b = uuid4(), uuid4()
     skill_a = Skill(
-        id=id_a, name="A", nature=SkillNature.TECH, normalized_name="a",
+        id=id_a,
+        name="A",
+        nature=SkillNature.TECH,
+        normalized_name="a",
         relations=[_belongs_to(id_b, "B")],
     )
     skill_b = Skill(
-        id=id_b, name="B", nature=SkillNature.TECH, normalized_name="b",
+        id=id_b,
+        name="B",
+        nature=SkillNature.TECH,
+        normalized_name="b",
         relations=[_belongs_to(id_a, "A")],
     )
 

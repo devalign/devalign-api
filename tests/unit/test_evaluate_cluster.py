@@ -46,7 +46,7 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
             affinity_score=0.5,
             is_primary=True,
         ),
-        secondary_affinities=[]
+        secondary_affinities=[],
     )
 
     # Mock cluster
@@ -90,4 +90,6 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
     saved_profile = profile_repo.save.call_args[0][0]
     assert len(saved_profile.secondary_affinities) == 1
     assert saved_profile.secondary_affinities[0].cluster_name == cluster_name
-    assert saved_profile.secondary_affinities[0].affinity_score == 1.0  # Since user has Java and cluster has Java
+    assert (
+        saved_profile.secondary_affinities[0].affinity_score == 1.0
+    )  # Since user has Java and cluster has Java

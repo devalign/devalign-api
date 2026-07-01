@@ -77,8 +77,7 @@ def test_compute_domain_affinities_calculates_correct_scores():
 
     # Act
     domain_affinities = compute_domain_affinities(
-        [skill_1, skill_2, skill_3],
-        [cluster_1, cluster_2]
+        [skill_1, skill_2, skill_3], [cluster_1, cluster_2]
     )
 
     # Assert

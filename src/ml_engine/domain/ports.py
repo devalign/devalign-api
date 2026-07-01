@@ -96,9 +96,7 @@ class SkillRepository(ABC):
         ...
 
     @abstractmethod
-    async def add_relations(
-        self, relations: list[tuple[UUID, UUID, SkillRelationType]]
-    ) -> None:
+    async def add_relations(self, relations: list[tuple[UUID, UUID, SkillRelationType]]) -> None:
         """Persist skill-to-skill knowledge graph edges (idempotent)."""
         ...
 

@@ -44,4 +44,3 @@ class CVStatusDTO(BaseModel):
     status: str | None = None
     uploaded_at: datetime | None = None
     error_message: str | None = None
-

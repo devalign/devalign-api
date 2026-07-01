@@ -127,10 +127,7 @@ class ProfileUserFromCVUseCase:
                     years_of_experience=years_exp,
                     has_certification=has_cert,
                 )
-                stamped_skill = dc_replace(
-                    stamped_skill,
-                    ict_score=stamped_skill.calculate_ict()
-                )
+                stamped_skill = dc_replace(stamped_skill, ict_score=stamped_skill.calculate_ict())
                 decorated_skills.append(stamped_skill)
             else:
                 decorated_skills.append(skill)
@@ -202,11 +199,17 @@ class ProfileUserFromCVUseCase:
                         if current_skill.ict_score > existing.ict_score:
                             stamped_parent = dc_replace(
                                 existing,
-                                inferred_from=list(set([*existing.inferred_from, current_skill.name])),
+                                inferred_from=list(
+                                    set([*existing.inferred_from, current_skill.name])
+                                ),
                                 self_taught=existing.self_taught or current_skill.self_taught,
-                                personal_projects=existing.personal_projects or current_skill.personal_projects,
-                                years_of_experience=max(existing.years_of_experience, current_skill.years_of_experience),
-                                has_certification=existing.has_certification or current_skill.has_certification,
+                                personal_projects=existing.personal_projects
+                                or current_skill.personal_projects,
+                                years_of_experience=max(
+                                    existing.years_of_experience, current_skill.years_of_experience
+                                ),
+                                has_certification=existing.has_certification
+                                or current_skill.has_certification,
                                 ict_score=max(existing.ict_score, current_skill.ict_score),
                             )
                             inferred_skills[parent_id] = stamped_parent
@@ -250,16 +253,86 @@ class ProfileUserFromCVUseCase:
                     "location": "Lima, Perú",
                     "availability": "Inmediata",
                     "skills": [
-                        {"name": "Python", "category": "technical", "self_taught": False, "personal_projects": True, "years_of_experience": 3, "has_certification": True},
-                        {"name": "SQL", "category": "technical", "self_taught": True, "personal_projects": False, "years_of_experience": 4, "has_certification": False},
-                        {"name": "NoSQL", "category": "technical", "self_taught": True, "personal_projects": True, "years_of_experience": 2, "has_certification": False},
-                        {"name": "Liderazgo", "category": "soft", "self_taught": False, "personal_projects": False, "years_of_experience": 2, "has_certification": False},
-                        {"name": "Comunicación", "category": "soft", "self_taught": False, "personal_projects": False, "years_of_experience": 2, "has_certification": False},
-                        {"name": "Docker", "category": "tools", "self_taught": True, "personal_projects": True, "years_of_experience": 2, "has_certification": False},
-                        {"name": "Kubernetes", "category": "tools", "self_taught": True, "personal_projects": False, "years_of_experience": 1, "has_certification": False},
-                        {"name": "Git", "category": "tools", "self_taught": False, "personal_projects": True, "years_of_experience": 4, "has_certification": False},
-                        {"name": "Scrum", "category": "methodologies", "self_taught": False, "personal_projects": False, "years_of_experience": 3, "has_certification": True},
-                        {"name": "Microservicios", "category": "methodologies", "self_taught": False, "personal_projects": True, "years_of_experience": 3, "has_certification": False},
+                        {
+                            "name": "Python",
+                            "category": "technical",
+                            "self_taught": False,
+                            "personal_projects": True,
+                            "years_of_experience": 3,
+                            "has_certification": True,
+                        },
+                        {
+                            "name": "SQL",
+                            "category": "technical",
+                            "self_taught": True,
+                            "personal_projects": False,
+                            "years_of_experience": 4,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "NoSQL",
+                            "category": "technical",
+                            "self_taught": True,
+                            "personal_projects": True,
+                            "years_of_experience": 2,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Liderazgo",
+                            "category": "soft",
+                            "self_taught": False,
+                            "personal_projects": False,
+                            "years_of_experience": 2,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Comunicación",
+                            "category": "soft",
+                            "self_taught": False,
+                            "personal_projects": False,
+                            "years_of_experience": 2,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Docker",
+                            "category": "tools",
+                            "self_taught": True,
+                            "personal_projects": True,
+                            "years_of_experience": 2,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Kubernetes",
+                            "category": "tools",
+                            "self_taught": True,
+                            "personal_projects": False,
+                            "years_of_experience": 1,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Git",
+                            "category": "tools",
+                            "self_taught": False,
+                            "personal_projects": True,
+                            "years_of_experience": 4,
+                            "has_certification": False,
+                        },
+                        {
+                            "name": "Scrum",
+                            "category": "methodologies",
+                            "self_taught": False,
+                            "personal_projects": False,
+                            "years_of_experience": 3,
+                            "has_certification": True,
+                        },
+                        {
+                            "name": "Microservicios",
+                            "category": "methodologies",
+                            "self_taught": False,
+                            "personal_projects": True,
+                            "years_of_experience": 3,
+                            "has_certification": False,
+                        },
                     ],
                     "work_experience": [
                         {
@@ -415,11 +488,21 @@ class ProfileUserFromCVUseCase:
                         market_demand_percentage=round(s.frequency * 100)
                         if s.frequency is not None
                         else 100,
-                        self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
-                        personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
-                        years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
-                        has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
-                        ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                        self_taught=user_skills_map[s.normalized_name].self_taught
+                        if s.normalized_name in user_skills_map
+                        else False,
+                        personal_projects=user_skills_map[s.normalized_name].personal_projects
+                        if s.normalized_name in user_skills_map
+                        else False,
+                        years_of_experience=user_skills_map[s.normalized_name].years_of_experience
+                        if s.normalized_name in user_skills_map
+                        else 0,
+                        has_certification=user_skills_map[s.normalized_name].has_certification
+                        if s.normalized_name in user_skills_map
+                        else False,
+                        ict_score=user_skills_map[s.normalized_name].ict_score
+                        if s.normalized_name in user_skills_map
+                        else 0.0,
                         trend=determine_trend(s.name),
                     )
                     for s in primary.detected_skills
@@ -536,6 +619,7 @@ MOCK_TRENDS = {
     "cobol": "shrinking",
     "jquery": "shrinking",
 }
+
 
 def determine_trend(name: str) -> str:
     norm_name = name.lower().strip()
@@ -888,8 +972,7 @@ def compute_affinities_and_domains(
                 if cluster_domains:
                     # Find the user's best matching alternative skill in same domain
                     alternative_skills = [
-                        u for u in user_tech_skills
-                        if set(u.domain_tags) & cluster_domains
+                        u for u in user_tech_skills if set(u.domain_tags) & cluster_domains
                     ]
                     if alternative_skills:
                         best_alt = max(alternative_skills, key=lambda u: u.ict_score)
@@ -1115,7 +1198,11 @@ class GetKnowledgeGraphUseCase:
             if target_affinity:
                 acquired = {s.normalized_name: s for s in target_affinity.detected_skills}
                 gaps = {g.skill.normalized_name: g.skill for g in target_affinity.skill_gaps}
-                neutral = {s.normalized_name: s for s in profile.detected_skills if s.normalized_name not in acquired}
+                neutral = {
+                    s.normalized_name: s
+                    for s in profile.detected_skills
+                    if s.normalized_name not in acquired
+                }
             else:
                 acquired = {s.normalized_name: s for s in profile.detected_skills}
                 gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
@@ -1128,13 +1215,19 @@ class GetKnowledgeGraphUseCase:
         # Fetch all non-ESCO skills to render as the general market backdrop
         non_esco_skills = await self._skills.get_non_esco_skills()
         market = {
-            s.normalized_name: s for s in non_esco_skills
+            s.normalized_name: s
+            for s in non_esco_skills
             if s.normalized_name not in acquired
             and s.normalized_name not in gaps
             and s.normalized_name not in neutral
         }
 
-        all_skills_to_render = list(acquired.values()) + list(gaps.values()) + list(neutral.values()) + list(market.values())
+        all_skills_to_render = (
+            list(acquired.values())
+            + list(gaps.values())
+            + list(neutral.values())
+            + list(market.values())
+        )
 
         # Deduplicate (a skill can appear in both acquired and gaps due to partial overlap)
         seen: set[str] = set()
@@ -1190,6 +1283,7 @@ def compute_domain_affinities(
     active_clusters: list[TechCluster],
 ) -> list[DomainAffinityDTO]:
     from src.ml_engine.application.dtos import DomainAffinityDTO
+
     domain_scores = {}
     for s in detected_skills:
         if s.core_domains:
@@ -1242,6 +1336,7 @@ class GetMyProfileUseCase:
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
             from src.ml_engine.domain.entities import ClusterAffinity, SeniorityLevel, UserProfile
+
             empty_profile = UserProfile(
                 user_id=user_id,
                 cv_id=None,
@@ -1270,7 +1365,9 @@ class GetMyProfileUseCase:
 
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
-        all_affinities = [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
+        all_affinities = (
+            [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
+        )
 
         user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
 
@@ -1303,11 +1400,23 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
-                            self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
-                            personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
-                            years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
-                            has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
-                            ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                            self_taught=user_skills_map[s.normalized_name].self_taught
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            personal_projects=user_skills_map[s.normalized_name].personal_projects
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            years_of_experience=user_skills_map[
+                                s.normalized_name
+                            ].years_of_experience
+                            if s.normalized_name in user_skills_map
+                            else 0,
+                            has_certification=user_skills_map[s.normalized_name].has_certification
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            ict_score=user_skills_map[s.normalized_name].ict_score
+                            if s.normalized_name in user_skills_map
+                            else 0.0,
                             trend=determine_trend(s.name),
                         )
                         for s in a.detected_skills
@@ -1350,11 +1459,23 @@ class GetMyProfileUseCase:
                             market_demand_percentage=round(s.frequency * 100)
                             if s.frequency is not None
                             else 100,
-                            self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
-                            personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
-                            years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
-                            has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
-                            ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                            self_taught=user_skills_map[s.normalized_name].self_taught
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            personal_projects=user_skills_map[s.normalized_name].personal_projects
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            years_of_experience=user_skills_map[
+                                s.normalized_name
+                            ].years_of_experience
+                            if s.normalized_name in user_skills_map
+                            else 0,
+                            has_certification=user_skills_map[s.normalized_name].has_certification
+                            if s.normalized_name in user_skills_map
+                            else False,
+                            ict_score=user_skills_map[s.normalized_name].ict_score
+                            if s.normalized_name in user_skills_map
+                            else 0.0,
                             trend=determine_trend(s.name),
                         )
                         for s in a.detected_skills
@@ -1435,7 +1556,9 @@ class EvaluateClusterDiagnosticUseCase:
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
-            raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+            raise HTTPException(
+                status_code=404, detail="No profile found. Please upload a CV first."
+            )
 
         active_clusters = await self._clusters.get_all_active()
         requested_cluster = next((c for c in active_clusters if c.name == cluster_name), None)
@@ -1495,7 +1618,9 @@ class GetClusterDiagnosticUseCase:
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
-            raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+            raise HTTPException(
+                status_code=404, detail="No profile found. Please upload a CV first."
+            )
 
         # Find if it already exists
         all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
@@ -1503,16 +1628,14 @@ class GetClusterDiagnosticUseCase:
         all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
 
         affinity = next(
-            (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()),
-            None
+            (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()), None
         )
 
         if not affinity:
             # We must compute it on the fly!
             active_clusters = await self._clusters.get_all_active()
             requested_cluster = next(
-                (c for c in active_clusters if c.name.lower() == cluster_name.lower()),
-                None
+                (c for c in active_clusters if c.name.lower() == cluster_name.lower()), None
             )
             if not requested_cluster:
                 raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
@@ -1554,8 +1677,7 @@ class GetClusterDiagnosticUseCase:
 
             all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
             affinity = next(
-                (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()),
-                None
+                (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()), None
             )
             if not affinity:
                 raise HTTPException(status_code=500, detail="Failed to retrieve computed affinity.")
@@ -1589,18 +1711,27 @@ class GetClusterDiagnosticUseCase:
                     if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
                     else (
                         "high"
-                        if (s.weight * (s.frequency if s.frequency is not None else 1.0))
-                        >= 1.0
+                        if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
                         else "medium"
                     ),
                     market_demand_percentage=round(s.frequency * 100)
                     if s.frequency is not None
                     else 100,
-                    self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
-                    personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
-                    years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
-                    has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
-                    ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                    self_taught=user_skills_map[s.normalized_name].self_taught
+                    if s.normalized_name in user_skills_map
+                    else False,
+                    personal_projects=user_skills_map[s.normalized_name].personal_projects
+                    if s.normalized_name in user_skills_map
+                    else False,
+                    years_of_experience=user_skills_map[s.normalized_name].years_of_experience
+                    if s.normalized_name in user_skills_map
+                    else 0,
+                    has_certification=user_skills_map[s.normalized_name].has_certification
+                    if s.normalized_name in user_skills_map
+                    else False,
+                    ict_score=user_skills_map[s.normalized_name].ict_score
+                    if s.normalized_name in user_skills_map
+                    else 0.0,
                     trend=determine_trend(s.name),
                 )
                 for s in affinity.detected_skills
@@ -1620,5 +1751,3 @@ class GetClusterDiagnosticUseCase:
             domain_affinities=domain_affinities_dto,
             total_profile_skills=len(profile.detected_skills),
         )
-
-

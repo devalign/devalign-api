@@ -243,5 +243,3 @@ class ResetAccountUseCase:
 
         # 4. Delete user profile (cascades to diagnostics and skills)
         await self._profiles.delete_by_user_id(user_id)
-
-
