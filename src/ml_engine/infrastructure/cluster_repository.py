@@ -1,5 +1,6 @@
 """SQLAlchemy implementation of ClusterRepository."""
 
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -10,6 +11,11 @@ from src.ml_engine.domain.entities import Skill, SkillNature, TechCluster
 from src.ml_engine.domain.ports import ClusterRepository
 from src.ml_engine.infrastructure.models import ClusterModel, ClusterSkillModel
 
+# Module-level cache for active tech clusters
+_CLUSTERS_CACHE: list[TechCluster] | None = None
+_CACHE_EXPIRY: datetime | None = None
+CACHE_TTL_SECONDS = 600  # 10 minutes
+
 
 class SQLClusterRepository(ClusterRepository):
     """SQLAlchemy implementation of ClusterRepository."""
@@ -19,13 +25,25 @@ class SQLClusterRepository(ClusterRepository):
 
     async def get_all_active(self) -> list[TechCluster]:
         """Retrieve all active tech clusters."""
+        global _CLUSTERS_CACHE, _CACHE_EXPIRY
+
+        now = datetime.utcnow()
+        if _CLUSTERS_CACHE is not None and _CACHE_EXPIRY is not None and now < _CACHE_EXPIRY:
+            return _CLUSTERS_CACHE
+
         result = await self._session.execute(
             select(ClusterModel).options(
                 selectinload(ClusterModel.cluster_skills).selectinload(ClusterSkillModel.skill)
             )
         )
         models = result.scalars().all()
-        return [self._to_entity(m) for m in models]
+        entities = [self._to_entity(m) for m in models]
+
+        # Update cache
+        _CLUSTERS_CACHE = entities
+        _CACHE_EXPIRY = now + timedelta(seconds=CACHE_TTL_SECONDS)
+
+        return entities
 
     async def get_by_id(self, cluster_id: UUID) -> TechCluster | None:
         """Retrieve a cluster by ID."""

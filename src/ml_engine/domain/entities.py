@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
@@ -107,6 +108,8 @@ class ClusterAffinity:
     ai_insight: str | None = None
     detected_skills: list[Skill] = field(default_factory=list)
     skill_gaps: list[SkillGap] = field(default_factory=list)
+    job_offer_count: int = 0
+    top_skills: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -139,6 +142,8 @@ class UserProfile:
     work_experience: list[dict[str, Any]] = field(default_factory=list)
     education: list[dict[str, Any]] = field(default_factory=list)
     certifications: list[dict[str, Any]] = field(default_factory=list)
+    cv_raw_text: str | None = None
+    last_analysis_date: datetime | None = None
 
     @property
     def primary_specialty(self) -> str:

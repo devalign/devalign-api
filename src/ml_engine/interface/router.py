@@ -1,232 +1,39 @@
-"""ML Engine FastAPI router."""
+"""ML Engine FastAPI routers."""
 
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import select
 
 from src.dependencies import SessionDep
 from src.ml_engine.application.dtos import (
     ClusterDTO,
-    ProfileUpdateDTO,
+    DiagnosticDetailDTO,
+    GraphResponseDTO,
     SkillsUpdateDTO,
     UserProfileDTO,
 )
 from src.ml_engine.application.use_cases import (
     EvaluateClusterDiagnosticUseCase,
-    GetMyProfileUseCase,
+    GetClusterDiagnosticUseCase,
     ListClustersUseCase,
-    ProfileUserFromCVUseCase,
 )
-from src.ml_engine.domain.entities import UserProfile
+from src.ml_engine.domain.entities import Skill, SkillNature
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
-from src.ml_engine.infrastructure.llm_client import get_llm_service
+from src.ml_engine.infrastructure.models import SkillModel
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
-from src.shared.security import CurrentUserIdDep, CurrentUserPayloadDep, OptionalUserIdDep
+from src.shared.security import CurrentUserIdDep, OptionalUserIdDep
 
-router = APIRouter(prefix="/profile", tags=["ML Engine — Profiling"])
-
-
-@router.post(
-    "/analyze",
-    response_model=UserProfileDTO,
-    status_code=202,
-    summary="Analyze CV and generate user profile",
-)
-async def analyze_cv(
-    current_user_id: CurrentUserIdDep,
-    session: SessionDep,
-    file: UploadFile = File(..., description="CV to analyze (PDF or DOCX)"),
-) -> UserProfileDTO:
-    """
-    Upload and analyze a CV to generate a developer profile.
-
-    This endpoint:
-    1. Parses the CV document
-    2. Generates a semantic embedding
-    3. Matches the embedding against known tech clusters
-    4. Detects skill gaps vs the primary specialty
-    5. Returns a structured profile with alignment scores
-
-    Returns HTTP 202 as processing may take a few seconds.
-    """
-    from uuid import uuid4
-
-    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
-
-    content = await file.read()
-    cv_id = uuid4()  # Temporary CV ID — persisted in full flow
-
-    use_case = ProfileUserFromCVUseCase(
-        cv_parser=LocalCVParserService(),
-        cluster_repository=SQLClusterRepository(session),
-        profile_repository=SQLUserProfileRepository(session),
-        llm_service=get_llm_service(),
-        skill_repository=SQLSkillRepository(session),
-    )
-    return await use_case.execute(
-        user_id=UUID(current_user_id),
-        cv_id=cv_id,
-        cv_content=content,
-        content_type=file.content_type or "application/pdf",
-    )
+# Routers
+me_router = APIRouter(prefix="/me", tags=["User Portal — Skills"])
+market_router = APIRouter(prefix="/market", tags=["Market Intelligence"])
+admin_router = APIRouter(prefix="/admin", tags=["Admin Operations"])
 
 
-@router.get(
-    "/clusters",
-    response_model=list[ClusterDTO],
-    summary="List all discovered tech specialties",
-)
-async def list_clusters(session: SessionDep) -> list[ClusterDTO]:
-    """
-    Returns all tech clusters discovered by K-Prototypes clustering.
+# === ME ROUTER ===
 
-    Each cluster represents a real market specialty (e.g., "Backend Cloud-Native Java").
-    """
-    use_case = ListClustersUseCase(cluster_repository=SQLClusterRepository(session))
-    return await use_case.execute()
-
-
-@router.post(
-    "/normalize-skills",
-    summary="Normalize raw skills from job offers",
-)
-async def normalize_skills(session: SessionDep) -> dict[str, Any]:
-    """
-    Triggers the Skill Normalization pipeline:
-    1. Fetches unnormalized job offers from the scraper.
-    2. Uses word embeddings to deduplicate and link skills via offer_skills.
-    3. Marks the processed offers as normalized.
-    """
-    from src.ml_engine.application.use_cases import NormalizeSkillsUseCase
-    from src.ml_engine.infrastructure.embeddings import get_embedding_service
-    from src.ml_engine.infrastructure.job_offer_repository import SQLMLJobOfferRepository
-    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
-
-    use_case = NormalizeSkillsUseCase(
-        job_offer_repo=SQLMLJobOfferRepository(session),
-        skill_repo=SQLSkillRepository(session),
-        embedding_service=get_embedding_service(),
-    )
-    return await use_case.execute()
-
-
-@router.get(
-    "/me",
-    response_model=UserProfileDTO,
-    summary="Get logged-in user's computed profile",
-)
-async def get_my_profile(
-    payload: CurrentUserPayloadDep,
-    session: SessionDep,
-) -> UserProfileDTO:
-    """
-    Get the computed profile of the authenticated developer.
-    Returns HTTP 404 if no CV has been analyzed yet.
-    """
-    from datetime import datetime
-    from uuid import UUID
-
-    from fastapi import HTTPException
-    from sqlalchemy import select
-
-    from src.delivery.infrastructure.models import UserModel
-    from src.ml_engine.application.use_cases import GetMyProfileUseCase
-    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-
-    user_id = UUID(str(payload.get("sub")))
-
-    # JIT Provisioning fallback
-    user_result = await session.execute(
-        select(UserModel).where(UserModel.user_id == user_id)
-    )
-    user_exists = user_result.scalar_one_or_none()
-
-    if not user_exists:
-        email = str(payload.get("email") or "")
-        user_metadata = payload.get("user_metadata") or {}
-        if not isinstance(user_metadata, dict):
-            user_metadata = {}
-        full_name = str(user_metadata.get("full_name") or user_metadata.get("name") or "") or None
-        avatar_url = str(user_metadata.get("avatar_url") or user_metadata.get("picture") or "") or None
-
-        new_user = UserModel(
-            user_id=user_id,
-            email=email,
-            full_name=full_name,
-            avatar_url=avatar_url,
-            created_at=datetime.utcnow()
-        )
-        session.add(new_user)
-        await session.flush()
-
-    repo = SQLUserProfileRepository(session)
-    cluster_repo = SQLClusterRepository(session)
-    use_case = GetMyProfileUseCase(repo, cluster_repo)
-
-    dto = await use_case.execute(user_id)
-    if not dto:
-        raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
-
-    return dto
-
-
-@router.patch(
-    "/me",
-    response_model=UserProfileDTO,
-    summary="Update manual fields of developer profile",
-)
-async def update_my_profile(
-    current_user_id: CurrentUserIdDep,
-    session: SessionDep,
-    data: ProfileUpdateDTO,
-) -> UserProfileDTO:
-    """
-    Manually update profile details (location, modality, availability, experience lists).
-    """
-    from uuid import UUID
-
-    from fastapi import HTTPException
-
-    repo = SQLUserProfileRepository(session)
-    profile = await repo.get_by_user_id(UUID(current_user_id))
-    if not profile:
-        raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
-
-    from dataclasses import replace
-
-    kwargs = {}
-    for field in [
-        "full_name",
-        "current_job_role",
-        "years_experience",
-        "preferred_modality",
-        "location",
-        "availability",
-        "work_experience",
-        "education",
-        "certifications",
-    ]:
-        val = getattr(data, field)
-        if val is not None:
-            kwargs[field] = val
-
-    updated_profile = replace(profile, **kwargs)
-    await repo.save(updated_profile)
-
-    from src.ml_engine.application.use_cases import GetMyProfileUseCase
-    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-
-    dto = await GetMyProfileUseCase(repo, SQLClusterRepository(session)).execute(
-        UUID(current_user_id)
-    )
-    if not dto:
-        raise HTTPException(status_code=404, detail="Profile not found after update")
-    return dto
-
-
-@router.put(
+@me_router.put(
     "/skills",
     response_model=UserProfileDTO,
     summary="Update manual skills for developer profile",
@@ -239,14 +46,6 @@ async def update_my_skills(
     """
     Overwrite the skills and gaps associated with the latest diagnostic.
     """
-    from uuid import UUID
-
-    from fastapi import HTTPException
-    from sqlalchemy import select
-
-    from src.ml_engine.domain.entities import Skill, SkillNature
-    from src.ml_engine.infrastructure.models import SkillModel
-
     repo = SQLUserProfileRepository(session)
     profile = await repo.get_by_user_id(UUID(current_user_id))
     if not profile:
@@ -263,7 +62,6 @@ async def update_my_skills(
 
     detected_skills = []
     for s in data.skills:
-        # Determine nature
         nature_val = SkillNature.TECH
         if s.skill_type:
             try:
@@ -284,7 +82,7 @@ async def update_my_skills(
                 nature=SkillNature(db_skill.nature) if db_skill.nature else nature_val,
                 normalized_name=db_skill.name.lower().replace(" ", "").replace(".", ""),
                 weight=float(db_skill.weight),
-                frequency=0.1,  # default placeholder frequency
+                frequency=0.1,
                 domain_tags=db_skill.domain_tags or [],
                 core_domains=db_skill.core_domains or [],
             )
@@ -297,10 +95,8 @@ async def update_my_skills(
         detected_skills.append(skill_entity)
 
     # 2. Recalcular Diagnóstico Activo y Evaluados
-    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
     cluster_repo = SQLClusterRepository(session)
-
-    existing_diagnostics = [profile.primary_affinity] + profile.secondary_affinities
+    existing_diagnostics = [profile.primary_affinity, *profile.secondary_affinities]
     existing_diagnostics = [a for a in existing_diagnostics if a.cluster_name != "Sin Diagnóstico"]
 
     clusters_to_eval = []
@@ -315,7 +111,7 @@ async def update_my_skills(
 
     # Recalcular affinities
     from src.ml_engine.application.use_cases import compute_affinities_and_domains
-    primary, secondaries, all_affinities, _ = compute_affinities_and_domains(
+    primary, secondaries, _all_affinities, _ = compute_affinities_and_domains(
         detected_skills, clusters_to_eval
     )
 
@@ -343,14 +139,15 @@ async def update_my_skills(
     await repo.save(updated_profile)
 
     # 4. Devolver perfil actualizado
+    from src.ml_engine.application.use_cases import GetMyProfileUseCase
     dto = await GetMyProfileUseCase(repo, cluster_repo).execute(UUID(current_user_id))
     if not dto:
         raise HTTPException(status_code=404, detail="Profile not found after update")
     return dto
 
 
-@router.post(
-    "/evaluate-cluster/{cluster_name}",
+@me_router.post(
+    "/affinities/{cluster_name}",
     response_model=UserProfileDTO,
     summary="Evaluate user's CV/skills against a specific tech cluster",
 )
@@ -363,10 +160,6 @@ async def evaluate_cluster_diagnostic(
     Evaluate the user's current profile/skills against a specific tech cluster,
     saving the diagnostic results under secondary_affinities.
     """
-    from uuid import UUID
-
-    from fastapi import HTTPException
-
     repo = SQLUserProfileRepository(session)
     cluster_repo = SQLClusterRepository(session)
     use_case = EvaluateClusterDiagnosticUseCase(repo, cluster_repo)
@@ -377,8 +170,48 @@ async def evaluate_cluster_diagnostic(
     return dto
 
 
-@router.get(
+@me_router.get(
+    "/diagnostics/{cluster_name}",
+    response_model=DiagnosticDetailDTO,
+    summary="Get detailed diagnostic for a specific cluster",
+)
+async def get_cluster_diagnostic(
+    cluster_name: str,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> DiagnosticDetailDTO:
+    """
+    Get or evaluate the user's diagnostic for a specific cluster, returning
+    consolidated profile, gap, and market statistics.
+    """
+    repo = SQLUserProfileRepository(session)
+    cluster_repo = SQLClusterRepository(session)
+    use_case = GetClusterDiagnosticUseCase(repo, cluster_repo)
+
+    dto = await use_case.execute(UUID(current_user_id), cluster_name)
+    if not dto:
+        raise HTTPException(status_code=404, detail=f"Diagnostic for '{cluster_name}' not found.")
+    return dto
+
+
+# === MARKET ROUTER ===
+
+@market_router.get(
+    "/clusters",
+    response_model=list[ClusterDTO],
+    summary="List all discovered tech specialties",
+)
+async def list_clusters(session: SessionDep) -> list[ClusterDTO]:
+    """
+    Returns all tech clusters discovered by K-Prototypes clustering.
+    """
+    use_case = ListClustersUseCase(cluster_repository=SQLClusterRepository(session))
+    return await use_case.execute()
+
+
+@market_router.get(
     "/skills-graph",
+    response_model=GraphResponseDTO,
     summary="Get the knowledge graph of skills and their relations",
 )
 async def get_skills_graph(
@@ -390,11 +223,8 @@ async def get_skills_graph(
     Returns the complete knowledge graph of skills, including explicit relationships
     and implicit domain connections. If authenticated, highlights user's acquired skills and gaps.
     """
-    from uuid import UUID
-
     from src.ml_engine.application.use_cases import GetKnowledgeGraphUseCase
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
-    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
 
     use_case = GetKnowledgeGraphUseCase(
         skill_repository=SQLSkillRepository(session),
@@ -405,45 +235,24 @@ async def get_skills_graph(
     return await use_case.execute(user_id=uid, cluster_name=cluster)
 
 
-def _map_entity_to_dto(profile: UserProfile) -> UserProfileDTO:
-    from src.ml_engine.application.dtos import ClusterAffinityDTO, SkillDTO
+# === ADMIN ROUTER ===
 
-    return UserProfileDTO(
-        user_id=profile.user_id,
-        cv_id=profile.cv_id,
-        seniority=profile.seniority.value,
-        primary_specialty=profile.primary_specialty,
-        alignment_score=profile.alignment_score,
-        secondary_affinities=[
-            ClusterAffinityDTO(
-                cluster_id=a.cluster_id,
-                cluster_name=a.cluster_name,
-                affinity_score=a.affinity_score,
-                is_primary=False,
-                ai_insight=a.ai_insight,
-            )
-            for a in profile.secondary_affinities
-        ],
-        detected_skills=[
-            SkillDTO(name=s.name, skill_type=s.nature.value, market_importance="consolidated")
-            for s in profile.detected_skills
-        ],
-        skill_gaps=[
-            SkillDTO(
-                name=g.skill.name,
-                skill_type=g.skill.nature.value,
-                market_importance=g.market_importance,
-            )
-            for g in profile.skill_gaps
-        ],
-        full_name=profile.full_name,
-        current_job_role=profile.current_job_role,
-        years_experience=profile.years_experience,
-        preferred_modality=profile.preferred_modality,
-        location=profile.location,
-        availability=profile.availability,
-        work_experience=profile.work_experience,
-        education=profile.education,
-        certifications=profile.certifications,
-        message="Profile processed successfully",
+@admin_router.post(
+    "/skills/normalize",
+    summary="Normalize raw skills from job offers",
+)
+async def normalize_skills(session: SessionDep) -> dict[str, Any]:
+    """
+    Triggers the Skill Normalization pipeline.
+    """
+    from src.ml_engine.application.use_cases import NormalizeSkillsUseCase
+    from src.ml_engine.infrastructure.embeddings import get_embedding_service
+    from src.ml_engine.infrastructure.job_offer_repository import SQLMLJobOfferRepository
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
+
+    use_case = NormalizeSkillsUseCase(
+        job_offer_repo=SQLMLJobOfferRepository(session),
+        skill_repo=SQLSkillRepository(session),
+        embedding_service=get_embedding_service(),
     )
+    return await use_case.execute()

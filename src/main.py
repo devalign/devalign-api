@@ -11,7 +11,7 @@ from src.config import settings
 
 # Module routers
 from src.delivery.interface.router import router as delivery_router
-from src.ml_engine.interface.router import router as ml_router
+from src.ml_engine.interface.router import admin_router, market_router, me_router
 from src.scraper.interface.router import router as scraper_router
 from src.shared.database import engine
 from src.shared.logging import configure_logging
@@ -30,6 +30,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         env=settings.APP_ENV,
         version=settings.VERSION,
     )
+
+    import asyncio
+
+    async def prewarm_cache():
+        try:
+            from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+            from src.shared.database import AsyncSessionLocal
+            logger.info("Pre-warming cluster cache in background...")
+            async with AsyncSessionLocal() as session:
+                await SQLClusterRepository(session).get_all_active()
+            logger.info("Cluster cache pre-warmed successfully")
+        except Exception as e:
+            logger.error("Failed to pre-warm cluster cache", error=str(e))
+
+    asyncio.create_task(prewarm_cache())
+
     yield
     # Shutdown
     await engine.dispose()
@@ -63,7 +79,9 @@ def create_app() -> FastAPI:
 
     # === Routers ===
     app.include_router(delivery_router, prefix=settings.API_V1_PREFIX)
-    app.include_router(ml_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(me_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(market_router, prefix=settings.API_V1_PREFIX)
+    app.include_router(admin_router, prefix=settings.API_V1_PREFIX)
     app.include_router(scraper_router, prefix=settings.API_V1_PREFIX)
 
     # === Health check ===

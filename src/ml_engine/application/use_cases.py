@@ -10,6 +10,7 @@ import structlog
 from src.ml_engine.application.dtos import (
     ClusterAffinityDTO,
     ClusterDTO,
+    DiagnosticDetailDTO,
     DomainAffinityDTO,
     SkillDTO,
     UserProfileDTO,
@@ -375,6 +376,7 @@ class ProfileUserFromCVUseCase:
                 work_experience=extracted_data.get("work_experience") or [],
                 education=extracted_data.get("education") or [],
                 certifications=extracted_data.get("certifications") or [],
+                cv_raw_text=cv_text,
             )
             await self._profiles.save(profile)
 
@@ -556,7 +558,7 @@ Extract the following details from the CV text in a structured JSON format:
 7. Work experience (work_experience: list of objects with company, role, description, start_date, end_date, current (bool))
 8. Education (education: list of objects with institution, degree, start_date, end_date)
 9. Certifications (certifications: list of objects with name, issuer, date)
-10. Technical & Soft Skills (skills: list of objects). For EACH skill mentioned in the CV (either explicitly or contextually inferred from job description tasks/projects/certifications), identify:
+10. Technical & Soft Skills (skills: list of objects). You MUST extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, architecture, and soft skill mentioned in the CV. Do NOT summarize, group, or omit any. Even if a technology is only mentioned once, extract it. The skills list should be exhaustive (typically containing 30+ items for a technical profile). For each skill, identify:
     - name (the name of the skill, e.g., Python, Docker, Scrum, Liderazgo)
     - category (one of: 'technical', 'soft', 'tools', 'methodologies')
     - self_taught (boolean: true if the CV mentions taking courses, bootcamps, or learning this self-taught/autodidacta)
@@ -1127,9 +1129,9 @@ class GetKnowledgeGraphUseCase:
         # Fetch all non-ESCO skills to render as the general market backdrop
         non_esco_skills = await self._skills.get_non_esco_skills()
         market = {
-            s.normalized_name: s for s in non_esco_skills 
-            if s.normalized_name not in acquired 
-            and s.normalized_name not in gaps 
+            s.normalized_name: s for s in non_esco_skills
+            if s.normalized_name not in acquired
+            and s.normalized_name not in gaps
             and s.normalized_name not in neutral
         }
 
@@ -1240,7 +1242,7 @@ class GetMyProfileUseCase:
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
-            from src.ml_engine.domain.entities import UserProfile, ClusterAffinity, SeniorityLevel
+            from src.ml_engine.domain.entities import ClusterAffinity, SeniorityLevel, UserProfile
             empty_profile = UserProfile(
                 user_id=user_id,
                 cv_id=None,
@@ -1255,6 +1257,7 @@ class GetMyProfileUseCase:
                 ),
                 secondary_affinities=[],
                 skill_gaps=[],
+                cv_raw_text=None,
             )
             await self._profiles.save(empty_profile)
             profile = await self._profiles.get_by_user_id(user_id)
@@ -1473,4 +1476,150 @@ class EvaluateClusterDiagnosticUseCase:
 
         # Return updated profile
         return await GetMyProfileUseCase(self._profiles, self._clusters).execute(user_id)
+
+
+class GetClusterDiagnosticUseCase:
+    """Gets or computes the diagnostic of a user profile's detected skills against a specific cluster."""
+
+    def __init__(
+        self,
+        profile_repository: UserProfileRepository,
+        cluster_repository: ClusterRepository,
+    ) -> None:
+        self._profiles = profile_repository
+        self._clusters = cluster_repository
+
+    async def execute(self, user_id: UUID, cluster_name: str) -> DiagnosticDetailDTO | None:
+        from dataclasses import replace
+
+        from fastapi import HTTPException
+
+        profile = await self._profiles.get_by_user_id(user_id)
+        if not profile:
+            raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+
+        # Find if it already exists
+        all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
+        # Clean 'Sin Diagnóstico' out if it was empty
+        all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
+
+        affinity = next(
+            (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()),
+            None
+        )
+
+        if not affinity:
+            # We must compute it on the fly!
+            active_clusters = await self._clusters.get_all_active()
+            requested_cluster = next(
+                (c for c in active_clusters if c.name.lower() == cluster_name.lower()),
+                None
+            )
+            if not requested_cluster:
+                raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
+
+            # Compute
+            _, _, affinities, _ = compute_affinities_and_domains(
+                profile.detected_skills, [requested_cluster]
+            )
+            if not affinities:
+                raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
+
+            new_affinity = affinities[0]
+            new_affinity = ClusterAffinity(
+                cluster_id=new_affinity.cluster_id,
+                cluster_name=new_affinity.cluster_name,
+                affinity_score=new_affinity.affinity_score,
+                is_primary=False,
+                market_insights=new_affinity.market_insights,
+                compatible_roles=new_affinity.compatible_roles,
+                ai_insight=new_affinity.ai_insight,
+                detected_skills=new_affinity.detected_skills,
+                skill_gaps=new_affinity.skill_gaps,
+                job_offer_count=new_affinity.job_offer_count,
+                top_skills=new_affinity.top_skills,
+            )
+
+            # Save
+            existing_secondaries = [
+                a for a in profile.secondary_affinities if a.cluster_name != requested_cluster.name
+            ]
+            updated_secondaries = [*existing_secondaries, new_affinity]
+            updated_profile = replace(profile, secondary_affinities=updated_secondaries)
+            await self._profiles.save(updated_profile)
+
+            # Reload profile
+            profile = await self._profiles.get_by_user_id(user_id)
+            if not profile:
+                raise HTTPException(status_code=500, detail="Profile lost after saving diagnostic.")
+
+            all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
+            affinity = next(
+                (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()),
+                None
+            )
+            if not affinity:
+                raise HTTPException(status_code=500, detail="Failed to retrieve computed affinity.")
+
+        # Expose top skills and job offer count
+        # In case we need domain affinities for the radar chart
+        active_clusters = await self._clusters.get_all_active()
+        active_clusters = [c for c in active_clusters if c.centroid_skills]
+        domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
+
+        user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
+
+        return DiagnosticDetailDTO(
+            user_id=profile.user_id,
+            full_name=profile.full_name,
+            current_job_role=profile.current_job_role,
+            seniority=profile.seniority.value,
+            last_analysis_date=profile.last_analysis_date,
+            cluster_name=affinity.cluster_name,
+            affinity_score=affinity.affinity_score,
+            job_offer_count=affinity.job_offer_count,
+            top_skills=affinity.top_skills,
+            market_insights=affinity.market_insights,
+            compatible_roles=affinity.compatible_roles,
+            ai_insight=affinity.ai_insight,
+            detected_skills=[
+                SkillDTO(
+                    name=s.name,
+                    skill_type=s.nature.value,
+                    market_importance="critical"
+                    if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
+                    else (
+                        "high"
+                        if (s.weight * (s.frequency if s.frequency is not None else 1.0))
+                        >= 1.0
+                        else "medium"
+                    ),
+                    market_demand_percentage=round(s.frequency * 100)
+                    if s.frequency is not None
+                    else 100,
+                    self_taught=user_skills_map.get(s.normalized_name).self_taught if s.normalized_name in user_skills_map else False,
+                    personal_projects=user_skills_map.get(s.normalized_name).personal_projects if s.normalized_name in user_skills_map else False,
+                    years_of_experience=user_skills_map.get(s.normalized_name).years_of_experience if s.normalized_name in user_skills_map else 0,
+                    has_certification=user_skills_map.get(s.normalized_name).has_certification if s.normalized_name in user_skills_map else False,
+                    ict_score=user_skills_map.get(s.normalized_name).ict_score if s.normalized_name in user_skills_map else 0.0,
+                    trend=determine_trend(s.name),
+                )
+                for s in affinity.detected_skills
+            ],
+            skill_gaps=[
+                SkillDTO(
+                    name=g.skill.name,
+                    skill_type=g.skill.nature.value,
+                    market_importance=g.market_importance,
+                    market_demand_percentage=round(g.skill.frequency * 100)
+                    if g.skill.frequency is not None
+                    else None,
+                    trend=determine_trend(g.skill.name),
+                )
+                for g in affinity.skill_gaps
+            ],
+            domain_affinities=domain_affinities_dto,
+            total_profile_skills=len(profile.detected_skills),
+        )
+
 
