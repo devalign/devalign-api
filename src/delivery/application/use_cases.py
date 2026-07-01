@@ -26,6 +26,9 @@ ALLOWED_CONTENT_TYPES = frozenset(
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ]
 )
+VALID_EXTENSIONS = frozenset(["pdf", "docx"])
+PDF_MAGIC = b"%PDF"
+DOCX_MAGIC = b"PK\x03\x04"
 
 
 class GetCurrentUserUseCase:
@@ -83,10 +86,27 @@ class UploadCVUseCase:
         content: bytes,
         content_type: str,
     ) -> CVUploadResultDTO:
-        # Validate file type
+        # Validate file type (content-type header)
         if content_type not in ALLOWED_CONTENT_TYPES:
             raise UnsupportedFileTypeError(
                 f"File type '{content_type}' not supported. Use PDF or DOCX."
+            )
+
+        # Validate file extension
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+        if ext not in VALID_EXTENSIONS:
+            raise UnsupportedFileTypeError(
+                f"File extension '.{ext}' not supported. Use .pdf or .docx."
+            )
+
+        # Validate file signature (magic bytes)
+        if content[:4] == PDF_MAGIC:
+            pass  # Valid PDF signature
+        elif content[:4] == DOCX_MAGIC:
+            pass  # Valid DOCX (ZIP) signature
+        else:
+            raise UnsupportedFileTypeError(
+                "File content signature does not match PDF or DOCX format."
             )
 
         # Validate file size
@@ -131,7 +151,15 @@ class UploadCVUseCase:
         saved_cv = await self._cvs.save(cv)
 
         # Generate download URL
-        download_url = await self._storage.get_signed_url(storage_path)
+        try:
+            download_url = await self._storage.get_signed_url(storage_path)
+        except Exception as exc:
+            logger.error(
+                "Failed to generate signed URL for uploaded CV",
+                cv_id=str(saved_cv.id),
+                error=str(exc),
+            )
+            download_url = None
 
         logger.info("CV uploaded successfully", cv_id=str(saved_cv.id))
 

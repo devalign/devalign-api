@@ -1,5 +1,6 @@
 """Delivery module API router."""
 
+import asyncio
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
@@ -192,39 +193,62 @@ async def run_profile_analysis_task(
     bg_logger = structlog.get_logger("background_tasks")
     bg_logger.info("Starting background CV analysis", user_id=str(user_id), cv_id=str(cv_id))
 
-    try:
-        async with AsyncSessionLocal() as session:
-            cv_repo = SQLAlchemyCVRepository(session)
-            await cv_repo.update_status(cv_id, "processing")
-            await session.commit()
+    max_retries = 3
+    last_exception: Exception | None = None
 
-            use_case = ProfileUserFromCVUseCase(
-                cv_parser=LocalCVParserService(),
-                cluster_repository=SQLClusterRepository(session),
-                profile_repository=SQLUserProfileRepository(session),
-                llm_service=get_llm_service(),
-                skill_repository=SQLSkillRepository(session),
-            )
-            await use_case.execute(
-                user_id=user_id,
-                cv_id=cv_id,
-                cv_content=content,
-                content_type=content_type,
-            )
-            await cv_repo.update_status(cv_id, "completed")
-            await session.commit()
-            bg_logger.info("Background CV analysis completed successfully", user_id=str(user_id))
-    except Exception as exc:
-        bg_logger.exception("Background CV analysis failed", user_id=str(user_id), error=str(exc))
+    for attempt in range(max_retries):
         try:
-            async with AsyncSessionLocal() as fail_session:
-                cv_repo = SQLAlchemyCVRepository(fail_session)
-                await cv_repo.update_status(cv_id, "failed")
-                await fail_session.commit()
-        except Exception as db_exc:
-            bg_logger.exception(
-                "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
+            async with AsyncSessionLocal() as session:
+                cv_repo = SQLAlchemyCVRepository(session)
+                await cv_repo.update_status(cv_id, "processing")
+                await session.commit()
+
+                use_case = ProfileUserFromCVUseCase(
+                    cv_parser=LocalCVParserService(),
+                    cluster_repository=SQLClusterRepository(session),
+                    profile_repository=SQLUserProfileRepository(session),
+                    llm_service=get_llm_service(),
+                    skill_repository=SQLSkillRepository(session),
+                )
+                await use_case.execute(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    cv_content=content,
+                    content_type=content_type,
+                )
+                await cv_repo.update_status(cv_id, "completed")
+                await session.commit()
+                bg_logger.info(
+                    "Background CV analysis completed successfully",
+                    user_id=str(user_id),
+                )
+                return
+        except Exception as exc:
+            last_exception = exc
+            bg_logger.warning(
+                "Background CV analysis attempt failed",
+                attempt=attempt + 1,
+                max_retries=max_retries,
+                user_id=str(user_id),
+                error=str(exc),
             )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2**attempt)
+
+    bg_logger.exception(
+        "Background CV analysis failed after all retries",
+        user_id=str(user_id),
+        error=str(last_exception),
+    )
+    try:
+        async with AsyncSessionLocal() as fail_session:
+            cv_repo = SQLAlchemyCVRepository(fail_session)
+            await cv_repo.update_status(cv_id, "failed")
+            await fail_session.commit()
+    except Exception as db_exc:
+        bg_logger.exception(
+            "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
+        )
 
 
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
