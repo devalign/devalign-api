@@ -16,8 +16,6 @@ from src.shared.exceptions import (
     DevalignException,
     NotFoundError,
 )
-from src.shared.middleware import RequestLoggingMiddleware
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -107,9 +105,7 @@ def test_unhandled_runtime_error_returns_500(test_client: TestClient) -> None:
 async def test_middleware_injects_request_id_header() -> None:
     """Successful requests must carry X-Request-ID in the response."""
     app = _make_app_with_routes()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get("/test-only/ok")
     assert resp.status_code == 200
     assert "x-request-id" in resp.headers
@@ -126,8 +122,6 @@ async def test_middleware_reraises_unhandled_exception() -> None:
     expected behaviour after the refactor (log + raise, not return 500 JSON).
     """
     app = _make_app_with_routes()
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as ac:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         with pytest.raises(RuntimeError, match="boom"):
             await ac.get("/test-only/raise-runtime")
