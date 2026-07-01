@@ -43,7 +43,7 @@ logger = structlog.get_logger(__name__)
 # Fallback data used when LLM structured extraction fails.
 # Centralised here to avoid inline literals and CPD false-positives.
 # ---------------------------------------------------------------------------
-_FALLBACK_CV_EXTRACTION_DATA: dict = {
+_FALLBACK_CV_EXTRACTION_DATA: dict[str, Any] = {
     "full_name": "Usuario Simulado",
     "current_job_role": "Backend Engineer",
     "years_experience": 4,
