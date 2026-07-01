@@ -40,6 +40,69 @@ from src.shared.exceptions import MLPipelineError
 logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
+# CV content validation — keyword-based heuristic to detect if a document
+# actually looks like a professional CV/resume before sending to the LLM.
+# ---------------------------------------------------------------------------
+_CV_SECTION_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "experience",
+        "experiencia",
+        "work history",
+        "historial laboral",
+        "education",
+        "educación",
+        "formación académica",
+        "skills",
+        "habilidades",
+        "competencias",
+        "professional summary",
+        "resumen profesional",
+        "perfil profesional",
+        "employment",
+        "empleo",
+        "trayectoria",
+        "projects",
+        "proyectos",
+        "certifications",
+        "certificaciones",
+        "languages",
+        "idiomas",
+        "references",
+        "referencias",
+        "objective",
+        "objetivo profesional",
+        "work experience",
+        "laboral",
+    }
+)
+
+
+def _looks_like_a_cv(text: str) -> bool:
+    """Quick heuristic: does the text contain CV-like section headers?"""
+    text_lower = text.lower()
+    section_matches = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in text_lower)
+    return section_matches >= 2
+
+
+def _build_cv_classification_prompt(text: str) -> str:
+    """Lightweight LLM prompt to classify whether text is a CV/resume."""
+    return f"""You are a document classifier. Determine if the following text is a professional CV/resume (currículum vitae).
+
+A CV/resume typically contains:
+- Personal information (name, contact details)
+- Work experience (companies, roles, dates)
+- Education history
+- Technical and soft skills
+- Professional summary or objective
+
+Respond with ONLY a valid JSON object with exactly two fields:
+{{"is_cv": true/false, "confidence": 0.0-1.0}}
+
+Text:
+{text[:3000]}"""
+
+
+# ---------------------------------------------------------------------------
 # Fallback data used when LLM structured extraction fails.
 # Centralised here to avoid inline literals and CPD false-positives.
 # ---------------------------------------------------------------------------
@@ -189,6 +252,44 @@ class ProfileUserFromCVUseCase:
         self._llm = llm_service
         self._skills = skill_repository
         self._catalog = skill_catalog or SkillCatalogService(skill_repository, llm_service)
+
+    async def _classify_as_cv(self, text: str) -> tuple[bool, float]:
+        """Determine if the extracted text is actually a CV/resume.
+
+        Uses a two-step approach:
+        1. Quick heuristic keyword check (no cost).
+        2. LLM pre-flight classification if heuristic is inconclusive.
+
+        Returns (is_cv, confidence).
+        """
+        # Step 1: Quick heuristic
+        if _looks_like_a_cv(text):
+            logger.debug("CV heuristic passed — document looks like a CV")
+            return True, 0.8
+
+        # Step 2: LLM pre-flight classification
+        logger.info("CV heuristic inconclusive, running LLM pre-flight classification")
+        try:
+            prompt = _build_cv_classification_prompt(text)
+            raw_output = await self._llm.generate(prompt=prompt, context=[])
+            import json
+
+            start = raw_output.find("{")
+            end = raw_output.rfind("}") + 1
+            if start != -1 and end > 0:
+                parsed = json.loads(raw_output[start:end])
+                is_cv = bool(parsed.get("is_cv", False))
+                confidence = float(parsed.get("confidence", 0.0))
+                logger.info(
+                    "LLM pre-flight classification result",
+                    is_cv=is_cv,
+                    confidence=confidence,
+                )
+                return is_cv, confidence
+        except Exception as exc:
+            logger.warning("LLM pre-flight classification failed, assuming CV", error=str(exc))
+
+        return True, 0.5
 
     async def _normalize_user_skills(
         self, raw_skills: list[dict[str, Any]] | dict[str, list[str]] | Any
@@ -350,6 +451,18 @@ class ProfileUserFromCVUseCase:
             if not cv_text.strip():
                 raise MLPipelineError("CV text extraction returned empty content")
 
+            # Step 1.5: Validate document is actually a CV
+            is_cv, confidence = await self._classify_as_cv(cv_text)
+            if not is_cv:
+                raise MLPipelineError(
+                    "The uploaded document does not appear to be a professional CV/resume. "
+                    "Please upload a document with your work experience, education, and skills."
+                )
+            logger.debug(
+                "Document classified as CV",
+                confidence=confidence,
+            )
+
             # Step 2: Run LLM structured extraction
             logger.info("Extracting structured info using LLM")
             try:
@@ -359,6 +472,16 @@ class ProfileUserFromCVUseCase:
                 if not extracted_data:
                     # If empty dict returned from parsing, treat as fallback trigger
                     raise ValueError("Empty extraction data parsed")
+                # Check if LLM flagged the document as not a CV
+                if "error" in extracted_data and extracted_data["error"] == "not_a_cv":
+                    doc_type = extracted_data.get("document_type", "unknown")
+                    raise MLPipelineError(
+                        f"The uploaded document does not appear to be a CV/resume "
+                        f"(detected as: {doc_type}). "
+                        "Please upload a document with your work experience, education, and skills."
+                    )
+            except MLPipelineError:
+                raise
             except Exception as e:
                 logger.warning(
                     "LLM structured extraction failed, using mock profile data fallback",
@@ -636,9 +759,20 @@ def determine_trend(name: str) -> str:
 
 
 def _build_cv_extraction_prompt(cv_text: str) -> str:
-    """Build structured prompt for LLM CV extraction."""
+    """Build structured prompt for LLM CV extraction.
+
+    The prompt instructs the LLM to first verify the document is a CV/resume
+    before attempting extraction, preventing hallucination on non-CV content.
+    """
     return f"""You are a professional CV analyzer.
-Extract the following details from the CV text in a structured JSON format:
+
+FIRST, determine if the text below is a professional CV/resume (currículum vitae).
+A CV typically contains personal information, work experience, education history, and skills.
+
+If the text is NOT a CV (e.g., it is an invoice, letter, contract, terms of service, or any other document), respond with EXACTLY:
+{{"error": "not_a_cv", "document_type": "<brief description of what the document appears to be>"}}
+
+If the text IS a CV, extract the following details in a structured JSON format:
 1. Full Name (full_name)
 2. Current Job Role (current_job_role)
 3. Years of experience (years_experience, integer)
@@ -659,7 +793,8 @@ Extract the following details from the CV text in a structured JSON format:
 CV Text:
 {cv_text}
 
-Respond ONLY with a valid JSON object matching this schema:
+Respond ONLY with a valid JSON object. If the text is not a CV, use the error format above.
+If it IS a CV, use this schema:
 {{
   "full_name": "string or null",
   "current_job_role": "string or null",
