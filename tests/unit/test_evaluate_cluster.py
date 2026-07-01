@@ -1,11 +1,19 @@
 """Unit tests for EvaluateClusterDiagnosticUseCase."""
 
-from uuid import uuid4
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
 
 from src.ml_engine.application.use_cases import EvaluateClusterDiagnosticUseCase
-from src.ml_engine.domain.entities import Skill, SkillNature, TechCluster, UserProfile, ClusterAffinity, SeniorityLevel
+from src.ml_engine.domain.entities import (
+    ClusterAffinity,
+    SeniorityLevel,
+    Skill,
+    SkillNature,
+    TechCluster,
+    UserProfile,
+)
 
 
 @pytest.mark.asyncio
@@ -77,7 +85,7 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
     assert dto is not None
     assert profile_repo.get_by_user_id.call_count == 2
     assert cluster_repo.get_all_active.call_count == 2
-    
+
     # Verify save was called with a profile containing the new secondary affinity
     saved_profile = profile_repo.save.call_args[0][0]
     assert len(saved_profile.secondary_affinities) == 1

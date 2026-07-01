@@ -5,21 +5,24 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from src.config import settings
-from src.shared.exceptions import DevalignException
 
 # Module routers
 from src.delivery.interface.router import router as delivery_router
 from src.ml_engine.interface.router import admin_router, market_router, me_router
 from src.scraper.interface.router import router as scraper_router
 from src.shared.database import engine
+from src.shared.exceptions import DevalignException
 from src.shared.logging import configure_logging
 from src.shared.middleware import RequestLoggingMiddleware
 
 logger = structlog.get_logger(__name__)
+
+# Keep strong references to background tasks to prevent garbage collection
+BACKGROUND_TASKS = set()
 
 
 @asynccontextmanager
@@ -46,7 +49,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.error("Failed to pre-warm cluster cache", error=str(e))
 
-    asyncio.create_task(prewarm_cache())
+    task = asyncio.create_task(prewarm_cache())
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
 
     yield
     # Shutdown

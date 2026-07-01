@@ -1,6 +1,7 @@
 """Unit tests for skills update logic and compute_domain_affinities."""
 
 from uuid import uuid4
+
 import pytest
 
 from src.ml_engine.application.use_cases import compute_domain_affinities
@@ -87,7 +88,7 @@ def test_compute_domain_affinities_calculates_correct_scores():
     # Total score = 2.85 + 3.45 = 6.30
     # Frontend affinity = 2.85 / 6.30 ≈ 0.45238
     # Backend affinity = 3.45 / 6.30 ≈ 0.54761
-    
+
     domain_map = {d.domain: d.affinity_score for d in domain_affinities}
     assert "Frontend" in domain_map
     assert "Backend" in domain_map

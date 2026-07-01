@@ -202,7 +202,7 @@ class ProfileUserFromCVUseCase:
                         if current_skill.ict_score > existing.ict_score:
                             stamped_parent = dc_replace(
                                 existing,
-                                inferred_from=list(set(existing.inferred_from + [current_skill.name])),
+                                inferred_from=list(set([*existing.inferred_from, current_skill.name])),
                                 self_taught=existing.self_taught or current_skill.self_taught,
                                 personal_projects=existing.personal_projects or current_skill.personal_projects,
                                 years_of_experience=max(existing.years_of_experience, current_skill.years_of_experience),
@@ -308,7 +308,7 @@ class ProfileUserFromCVUseCase:
                 raise MLPipelineError("No active clusters with centroid skills available")
 
             # Step 6: Compute Weighted Jaccard Similarity per cluster
-            primary, secondaries, affinities, _ = compute_affinities_and_domains(
+            primary, _secondaries, _affinities, _ = compute_affinities_and_domains(
                 detected_skills, active_clusters
             )
             if not primary:
@@ -1049,7 +1049,7 @@ class GetKnowledgeGraphUseCase:
         # catalog (potentially thousands of rows) which causes request timeouts.
         # The unauthenticated path (global explorer) still loads all skills.
         if user_id:
-            return await self._build_user_graph(user_id, cluster_name, GraphNodeDTO, GraphLinkDTO, GraphResponseDTO)
+            return await self._build_user_graph(user_id, cluster_name)
 
         # --- Unauthenticated / global explorer path (full catalog) ---
         all_skills = await self._skills.get_all_skills()
@@ -1088,9 +1088,6 @@ class GetKnowledgeGraphUseCase:
         self,
         user_id: UUID,
         cluster_name: str | None,
-        GraphNodeDTO: type,
-        GraphLinkDTO: type,
-        GraphResponseDTO: type,
     ) -> Any:
         """Build a knowledge graph scoped to a user's detected skills and skill gaps.
 
@@ -1098,6 +1095,8 @@ class GetKnowledgeGraphUseCase:
         the full skill catalog, making this O(1) in catalog size.
         If cluster_name is provided, scopes the skills to that specific cluster.
         """
+        from src.ml_engine.application.dtos import GraphLinkDTO, GraphNodeDTO, GraphResponseDTO
+
         profile = await self._profiles.get_by_user_id(user_id)
 
         if not profile:
@@ -1271,7 +1270,7 @@ class GetMyProfileUseCase:
 
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
-        all_affinities = [primary] + secondaries if primary.cluster_name != "Sin Diagnóstico" else []
+        all_affinities = [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
 
         user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
 
@@ -1444,7 +1443,7 @@ class EvaluateClusterDiagnosticUseCase:
             raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
 
         # Compute affinity for this cluster
-        primary, secondaries, affinities, _ = compute_affinities_and_domains(
+        _primary, _secondaries, affinities, _ = compute_affinities_and_domains(
             profile.detected_skills, [requested_cluster]
         )
         if not affinities:
@@ -1468,7 +1467,7 @@ class EvaluateClusterDiagnosticUseCase:
         existing_secondaries = [
             a for a in profile.secondary_affinities if a.cluster_name != cluster_name
         ]
-        updated_secondaries = existing_secondaries + [new_affinity]
+        updated_secondaries = [*existing_secondaries, new_affinity]
 
         # Save profile
         updated_profile = replace(profile, secondary_affinities=updated_secondaries)

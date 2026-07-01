@@ -6,10 +6,7 @@ from collections.abc import Callable
 
 import structlog
 from fastapi import Request, Response
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-
-from src.shared.exceptions import DevalignException
 
 logger = structlog.get_logger(__name__)
 
