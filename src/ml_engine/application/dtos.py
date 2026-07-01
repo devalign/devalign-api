@@ -1,5 +1,6 @@
 """ML Engine application DTOs."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -53,6 +54,8 @@ class ClusterAffinityDTO(BaseModel):
     ai_insight: str | None = None
     detected_skills: list[SkillDTO] = []
     skill_gaps: list[SkillDTO] = []
+    job_offer_count: int = 0
+    top_skills: list[str] = []
 
 
 class UserProfileDTO(BaseModel):
@@ -77,7 +80,27 @@ class UserProfileDTO(BaseModel):
     work_experience: list[dict[str, Any]] = []
     education: list[dict[str, Any]] = []
     certifications: list[dict[str, Any]] = []
+    last_analysis_date: datetime | None = None
     message: str = "Profile generated successfully"
+
+
+class DiagnosticDetailDTO(BaseModel):
+    user_id: UUID
+    full_name: str | None = None
+    current_job_role: str | None = None
+    seniority: str
+    last_analysis_date: datetime | None = None
+    cluster_name: str
+    affinity_score: float
+    job_offer_count: int
+    top_skills: list[str]
+    market_insights: dict[str, Any] | None = None
+    compatible_roles: list[dict[str, Any]] | None = None
+    ai_insight: str | None = None
+    detected_skills: list[SkillDTO] = []
+    skill_gaps: list[SkillDTO] = []
+    domain_affinities: list[DomainAffinityDTO] = []
+    total_profile_skills: int
 
 
 class ClusterDTO(BaseModel):

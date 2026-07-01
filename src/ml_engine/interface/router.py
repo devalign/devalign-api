@@ -9,12 +9,14 @@ from sqlalchemy import select
 from src.dependencies import SessionDep
 from src.ml_engine.application.dtos import (
     ClusterDTO,
+    DiagnosticDetailDTO,
     GraphResponseDTO,
     SkillsUpdateDTO,
     UserProfileDTO,
 )
 from src.ml_engine.application.use_cases import (
     EvaluateClusterDiagnosticUseCase,
+    GetClusterDiagnosticUseCase,
     ListClustersUseCase,
 )
 from src.ml_engine.domain.entities import Skill, SkillNature
@@ -165,6 +167,30 @@ async def evaluate_cluster_diagnostic(
     dto = await use_case.execute(UUID(current_user_id), cluster_name)
     if not dto:
         raise HTTPException(status_code=404, detail="Failed to evaluate cluster diagnostic.")
+    return dto
+
+
+@me_router.get(
+    "/diagnostics/{cluster_name}",
+    response_model=DiagnosticDetailDTO,
+    summary="Get detailed diagnostic for a specific cluster",
+)
+async def get_cluster_diagnostic(
+    cluster_name: str,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> DiagnosticDetailDTO:
+    """
+    Get or evaluate the user's diagnostic for a specific cluster, returning
+    consolidated profile, gap, and market statistics.
+    """
+    repo = SQLUserProfileRepository(session)
+    cluster_repo = SQLClusterRepository(session)
+    use_case = GetClusterDiagnosticUseCase(repo, cluster_repo)
+
+    dto = await use_case.execute(UUID(current_user_id), cluster_name)
+    if not dto:
+        raise HTTPException(status_code=404, detail=f"Diagnostic for '{cluster_name}' not found.")
     return dto
 
 

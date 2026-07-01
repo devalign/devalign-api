@@ -16,6 +16,8 @@ from src.ml_engine.domain.entities import (
 )
 from src.ml_engine.domain.ports import UserProfileRepository
 from src.ml_engine.infrastructure.models import (
+    ClusterModel,
+    ClusterSkillModel,
     DiagnosticModel,
     DiagnosticSkillModel,
     ProfileModel,
@@ -56,6 +58,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         profile_model.certifications = profile.certifications
         profile_model.cv_embedding = profile.embedding if profile.embedding else None
         profile_model.cv_id = profile.cv_id
+        profile_model.cv_raw_text = profile.cv_raw_text
 
         await self._session.flush()
 
@@ -246,7 +249,9 @@ class SQLUserProfileRepository(UserProfileRepository):
             .where(DiagnosticModel.profile_id == profile_model.profile_id)
             .order_by(DiagnosticModel.created_at.desc())
             .options(
-                selectinload(DiagnosticModel.detected_cluster),
+                selectinload(DiagnosticModel.detected_cluster).selectinload(
+                    ClusterModel.cluster_skills
+                ).selectinload(ClusterSkillModel.skill),
                 selectinload(DiagnosticModel.diagnostic_skills).selectinload(
                     DiagnosticSkillModel.skill
                 ),
@@ -278,6 +283,8 @@ class SQLUserProfileRepository(UserProfileRepository):
                 work_experience=profile_model.work_experience,
                 education=profile_model.education,
                 certifications=profile_model.certifications,
+                cv_raw_text=profile_model.cv_raw_text,
+                last_analysis_date=profile_model.updated_at,
             )
 
         # Deduplicate: only keep the latest diagnostic for each cluster
@@ -334,6 +341,8 @@ class SQLUserProfileRepository(UserProfileRepository):
                     compatible_roles=dm.detected_cluster.compatible_roles if dm.detected_cluster else None,
                     detected_skills=detected_skills,
                     skill_gaps=skill_gaps,
+                    job_offer_count=dm.detected_cluster.job_offer_count if dm.detected_cluster else 0,
+                    top_skills=[cs.skill.name for cs in dm.detected_cluster.cluster_skills[:8] if cs.skill] if dm.detected_cluster else [],
                 )
             )
 
@@ -352,6 +361,8 @@ class SQLUserProfileRepository(UserProfileRepository):
             compatible_roles=primary_affinity.compatible_roles,
             detected_skills=primary_affinity.detected_skills,
             skill_gaps=primary_affinity.skill_gaps,
+            job_offer_count=primary_affinity.job_offer_count,
+            top_skills=primary_affinity.top_skills,
         )
 
         secondary_affinities = affinities[1:]
@@ -376,6 +387,8 @@ class SQLUserProfileRepository(UserProfileRepository):
             work_experience=profile_model.work_experience,
             education=profile_model.education,
             certifications=profile_model.certifications,
+            cv_raw_text=profile_model.cv_raw_text,
+            last_analysis_date=profile_model.updated_at,
         )
 
     async def delete_by_user_id(self, user_id: UUID) -> None:
