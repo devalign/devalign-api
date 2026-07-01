@@ -4,10 +4,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 import structlog
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import settings
+from src.shared.exceptions import DevalignException
 
 # Module routers
 from src.delivery.interface.router import router as delivery_router
@@ -89,6 +91,14 @@ def create_app() -> FastAPI:
     async def health_check() -> dict[str, str]:
         """Service health check endpoint."""
         return {"status": "healthy", "version": settings.VERSION, "env": settings.APP_ENV}
+
+    # === Exception Handlers ===
+    @app.exception_handler(DevalignException)
+    async def devalign_exception_handler(request: Request, exc: DevalignException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
 
     return app
 
