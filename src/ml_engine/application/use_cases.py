@@ -39,6 +39,125 @@ from src.shared.exceptions import MLPipelineError
 
 logger = structlog.get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Fallback data used when LLM structured extraction fails.
+# Centralised here to avoid inline literals and CPD false-positives.
+# ---------------------------------------------------------------------------
+_FALLBACK_CV_EXTRACTION_DATA: dict = {
+    "full_name": "Usuario Simulado",
+    "current_job_role": "Backend Engineer",
+    "years_experience": 4,
+    "preferred_modality": "Híbrido",
+    "location": "Lima, Perú",
+    "availability": "Inmediata",
+    "skills": [
+        {
+            "name": "Python",
+            "category": "technical",
+            "self_taught": False,
+            "personal_projects": True,
+            "years_of_experience": 3,
+            "has_certification": True,
+        },
+        {
+            "name": "SQL",
+            "category": "technical",
+            "self_taught": True,
+            "personal_projects": False,
+            "years_of_experience": 4,
+            "has_certification": False,
+        },
+        {
+            "name": "NoSQL",
+            "category": "technical",
+            "self_taught": True,
+            "personal_projects": True,
+            "years_of_experience": 2,
+            "has_certification": False,
+        },
+        {
+            "name": "Liderazgo",
+            "category": "soft",
+            "self_taught": False,
+            "personal_projects": False,
+            "years_of_experience": 2,
+            "has_certification": False,
+        },
+        {
+            "name": "Comunicación",
+            "category": "soft",
+            "self_taught": False,
+            "personal_projects": False,
+            "years_of_experience": 2,
+            "has_certification": False,
+        },
+        {
+            "name": "Docker",
+            "category": "tools",
+            "self_taught": True,
+            "personal_projects": True,
+            "years_of_experience": 2,
+            "has_certification": False,
+        },
+        {
+            "name": "Kubernetes",
+            "category": "tools",
+            "self_taught": True,
+            "personal_projects": False,
+            "years_of_experience": 1,
+            "has_certification": False,
+        },
+        {
+            "name": "Git",
+            "category": "tools",
+            "self_taught": False,
+            "personal_projects": True,
+            "years_of_experience": 4,
+            "has_certification": False,
+        },
+        {
+            "name": "Scrum",
+            "category": "methodologies",
+            "self_taught": False,
+            "personal_projects": False,
+            "years_of_experience": 3,
+            "has_certification": True,
+        },
+        {
+            "name": "Microservicios",
+            "category": "methodologies",
+            "self_taught": False,
+            "personal_projects": True,
+            "years_of_experience": 3,
+            "has_certification": False,
+        },
+    ],
+    "work_experience": [
+        {
+            "company": "Tech Solutions",
+            "role": "Software Developer",
+            "start_date": "2022-01",
+            "end_date": "2024-05",
+            "description": "Desarrollo de microservicios con Python y bases de datos relacionales.",
+        }
+    ],
+    "education": [
+        {
+            "institution": "Universidad Nacional",
+            "degree": "Bachiller en Ingeniería de Sistemas",
+            "start_date": "2017",
+            "end_date": "2021",
+        }
+    ],
+    "certifications": [
+        {
+            "name": "AWS Certified Cloud Practitioner",
+            "issuer": "Amazon Web Services",
+            "date": "2023",
+        }
+    ],
+}
+
 
 class ProfileUserFromCVUseCase:
     """
@@ -245,120 +364,7 @@ class ProfileUserFromCVUseCase:
                     "LLM structured extraction failed, using mock profile data fallback",
                     error=str(e),
                 )
-                extracted_data = {
-                    "full_name": "Usuario Simulado",
-                    "current_job_role": "Backend Engineer",
-                    "years_experience": 4,
-                    "preferred_modality": "Híbrido",
-                    "location": "Lima, Perú",
-                    "availability": "Inmediata",
-                    "skills": [
-                        {
-                            "name": "Python",
-                            "category": "technical",
-                            "self_taught": False,
-                            "personal_projects": True,
-                            "years_of_experience": 3,
-                            "has_certification": True,
-                        },
-                        {
-                            "name": "SQL",
-                            "category": "technical",
-                            "self_taught": True,
-                            "personal_projects": False,
-                            "years_of_experience": 4,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "NoSQL",
-                            "category": "technical",
-                            "self_taught": True,
-                            "personal_projects": True,
-                            "years_of_experience": 2,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Liderazgo",
-                            "category": "soft",
-                            "self_taught": False,
-                            "personal_projects": False,
-                            "years_of_experience": 2,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Comunicación",
-                            "category": "soft",
-                            "self_taught": False,
-                            "personal_projects": False,
-                            "years_of_experience": 2,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Docker",
-                            "category": "tools",
-                            "self_taught": True,
-                            "personal_projects": True,
-                            "years_of_experience": 2,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Kubernetes",
-                            "category": "tools",
-                            "self_taught": True,
-                            "personal_projects": False,
-                            "years_of_experience": 1,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Git",
-                            "category": "tools",
-                            "self_taught": False,
-                            "personal_projects": True,
-                            "years_of_experience": 4,
-                            "has_certification": False,
-                        },
-                        {
-                            "name": "Scrum",
-                            "category": "methodologies",
-                            "self_taught": False,
-                            "personal_projects": False,
-                            "years_of_experience": 3,
-                            "has_certification": True,
-                        },
-                        {
-                            "name": "Microservicios",
-                            "category": "methodologies",
-                            "self_taught": False,
-                            "personal_projects": True,
-                            "years_of_experience": 3,
-                            "has_certification": False,
-                        },
-                    ],
-                    "work_experience": [
-                        {
-                            "company": "Tech Solutions",
-                            "role": "Software Developer",
-                            "start_date": "2022-01",
-                            "end_date": "2024-05",
-                            "description": "Desarrollo de microservicios con Python y bases de datos relacionales.",
-                        }
-                    ],
-                    "education": [
-                        {
-                            "institution": "Universidad Nacional",
-                            "degree": "Bachiller en Ingeniería de Sistemas",
-                            "start_date": "2017",
-                            "end_date": "2021",
-                        }
-                    ],
-                    "certifications": [
-                        {
-                            "name": "AWS Certified Cloud Practitioner",
-                            "issuer": "Amazon Web Services",
-                            "date": "2023",
-                        }
-                    ],
-                }
+                extracted_data = _FALLBACK_CV_EXTRACTION_DATA
 
             # Step 3: Embed CV text (mocked as zero vector for schema backwards compatibility)
             logger.info("Setting CV embedding to static zero vector")
