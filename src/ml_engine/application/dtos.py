@@ -73,6 +73,7 @@ class UserProfileDTO(BaseModel):
     skill_gaps: list[SkillDTO] = []
     full_name: str | None = None
     current_job_role: str | None = None
+    professional_summary: str | None = None
     years_experience: int | None = None
     preferred_modality: str | None = None
     location: str | None = None
@@ -81,6 +82,7 @@ class UserProfileDTO(BaseModel):
     education: list[dict[str, Any]] = []
     certifications: list[dict[str, Any]] = []
     last_analysis_date: datetime | None = None
+    is_diagnosed: bool = False
     message: str = "Profile generated successfully"
 
 
@@ -116,6 +118,7 @@ class ClusterDTO(BaseModel):
 class ProfileUpdateDTO(BaseModel):
     full_name: str | None = None
     current_job_role: str | None = None
+    professional_summary: str | None = None
     years_experience: int | None = None
     preferred_modality: str | None = None
     location: str | None = None

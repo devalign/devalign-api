@@ -1,9 +1,11 @@
 """ML Engine use cases."""
 
 import json
+from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import replace as dc_replace
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import structlog
 
@@ -102,124 +104,7 @@ Text:
 {text[:3000]}"""
 
 
-# ---------------------------------------------------------------------------
-# Fallback data used when LLM structured extraction fails.
-# Centralised here to avoid inline literals and CPD false-positives.
-# ---------------------------------------------------------------------------
-_FALLBACK_CV_EXTRACTION_DATA: dict[str, Any] = {
-    "full_name": "Usuario Simulado",
-    "current_job_role": "Backend Engineer",
-    "years_experience": 4,
-    "preferred_modality": "Híbrido",
-    "location": "Lima, Perú",
-    "availability": "Inmediata",
-    "skills": [
-        {
-            "name": "Python",
-            "category": "technical",
-            "self_taught": False,
-            "personal_projects": True,
-            "years_of_experience": 3,
-            "has_certification": True,
-        },
-        {
-            "name": "SQL",
-            "category": "technical",
-            "self_taught": True,
-            "personal_projects": False,
-            "years_of_experience": 4,
-            "has_certification": False,
-        },
-        {
-            "name": "NoSQL",
-            "category": "technical",
-            "self_taught": True,
-            "personal_projects": True,
-            "years_of_experience": 2,
-            "has_certification": False,
-        },
-        {
-            "name": "Liderazgo",
-            "category": "soft",
-            "self_taught": False,
-            "personal_projects": False,
-            "years_of_experience": 2,
-            "has_certification": False,
-        },
-        {
-            "name": "Comunicación",
-            "category": "soft",
-            "self_taught": False,
-            "personal_projects": False,
-            "years_of_experience": 2,
-            "has_certification": False,
-        },
-        {
-            "name": "Docker",
-            "category": "tools",
-            "self_taught": True,
-            "personal_projects": True,
-            "years_of_experience": 2,
-            "has_certification": False,
-        },
-        {
-            "name": "Kubernetes",
-            "category": "tools",
-            "self_taught": True,
-            "personal_projects": False,
-            "years_of_experience": 1,
-            "has_certification": False,
-        },
-        {
-            "name": "Git",
-            "category": "tools",
-            "self_taught": False,
-            "personal_projects": True,
-            "years_of_experience": 4,
-            "has_certification": False,
-        },
-        {
-            "name": "Scrum",
-            "category": "methodologies",
-            "self_taught": False,
-            "personal_projects": False,
-            "years_of_experience": 3,
-            "has_certification": True,
-        },
-        {
-            "name": "Microservicios",
-            "category": "methodologies",
-            "self_taught": False,
-            "personal_projects": True,
-            "years_of_experience": 3,
-            "has_certification": False,
-        },
-    ],
-    "work_experience": [
-        {
-            "company": "Tech Solutions",
-            "role": "Software Developer",
-            "start_date": "2022-01",
-            "end_date": "2024-05",
-            "description": "Desarrollo de microservicios con Python y bases de datos relacionales.",
-        }
-    ],
-    "education": [
-        {
-            "institution": "Universidad Nacional",
-            "degree": "Bachiller en Ingeniería de Sistemas",
-            "start_date": "2017",
-            "end_date": "2021",
-        }
-    ],
-    "certifications": [
-        {
-            "name": "AWS Certified Cloud Practitioner",
-            "issuer": "Amazon Web Services",
-            "date": "2023",
-        }
-    ],
-}
+
 
 
 class ProfileUserFromCVUseCase:
@@ -256,43 +141,24 @@ class ProfileUserFromCVUseCase:
     async def _classify_as_cv(self, text: str) -> tuple[bool, float]:
         """Determine if the extracted text is actually a CV/resume.
 
-        Uses a two-step approach:
-        1. Quick heuristic keyword check (no cost).
-        2. LLM pre-flight classification if heuristic is inconclusive.
+        Uses a fast heuristic only. The structured extraction step already has
+        an explicit ``not_a_cv`` guard, so we avoid a second LLM round-trip on
+        the hot path.
 
         Returns (is_cv, confidence).
         """
-        # Step 1: Quick heuristic
         if _looks_like_a_cv(text):
             logger.debug("CV heuristic passed — document looks like a CV")
             return True, 0.8
 
-        # Step 2: LLM pre-flight classification
-        logger.info("CV heuristic inconclusive, running LLM pre-flight classification")
-        try:
-            prompt = _build_cv_classification_prompt(text)
-            raw_output = await self._llm.generate(prompt=prompt, context=[])
-            import json
-
-            start = raw_output.find("{")
-            end = raw_output.rfind("}") + 1
-            if start != -1 and end > 0:
-                parsed = json.loads(raw_output[start:end])
-                is_cv = bool(parsed.get("is_cv", False))
-                confidence = float(parsed.get("confidence", 0.0))
-                logger.info(
-                    "LLM pre-flight classification result",
-                    is_cv=is_cv,
-                    confidence=confidence,
-                )
-                return is_cv, confidence
-        except Exception as exc:
-            logger.warning("LLM pre-flight classification failed, assuming CV", error=str(exc))
-
+        logger.info("CV heuristic inconclusive, continuing with structured extraction")
         return True, 0.5
 
     async def _normalize_user_skills(
-        self, raw_skills: list[dict[str, Any]] | dict[str, list[str]] | Any
+        self,
+        raw_skills: list[dict[str, Any]] | dict[str, list[str]] | Any,
+        use_llm_fallback: bool = True,
+        existing_skills_cache: list[Skill] | None = None,
     ) -> list[Skill]:
         # Handle the list of dicts structure (new LLM format)
         skill_evidence_map = {}
@@ -317,8 +183,12 @@ class ProfileUserFromCVUseCase:
         if not raw_strings:
             return []
 
-        # Delegate to the O(1) + LLM fallback service
-        resolved_skills = await self._catalog.resolve_skills(raw_strings)
+        # Delegate to the O(1) + optional LLM fallback service
+        resolved_skills = await self._catalog.resolve_skills(
+            raw_strings,
+            use_llm_fallback=use_llm_fallback,
+            existing_skills_cache=existing_skills_cache,
+        )
 
         # Decorate resolved skills with their evidence details
         decorated_skills = []
@@ -354,7 +224,12 @@ class ProfileUserFromCVUseCase:
 
         return decorated_skills
 
-    async def _expand_with_upward_inference(self, skills: list[Skill]) -> list[Skill]:
+    async def _expand_with_upward_inference(
+        self,
+        skills: list[Skill],
+        skill_graph: dict[UUID, Skill] | None = None,
+        all_skills: list[Skill] | None = None,
+    ) -> list[Skill]:
         """Traverse upward-pointing relations in the skill graph to infer implicit parent skills.
 
         Traversal rules:
@@ -367,6 +242,9 @@ class ProfileUserFromCVUseCase:
 
         Args:
             skills: The explicitly extracted skills from the candidate's CV.
+            skill_graph: Optional pre-built graph (bypasses DB round-trip).
+            all_skills: Optional pre-loaded skill list (builds graph from it,
+                bypassing the DB round-trip).  Takes precedence over skill_graph.
 
         Returns:
             The original skills plus any inferred parent skills, deduplicated by ID.
@@ -375,17 +253,19 @@ class ProfileUserFromCVUseCase:
             return []
 
         logger.info("Performing upward inference on detected skills", count=len(skills))
-        # Load the full graph in one round-trip (resolves names correctly)
-        skill_graph = await self._skills.get_skill_graph()
+        if all_skills is not None:
+            skill_graph = {s.id: s for s in all_skills if s.id}
+        elif skill_graph is None:
+            skill_graph = await self._skills.get_skill_graph()
 
         # Start with the explicitly detected skills, keyed by ID for O(1) dedup
         inferred_skills: dict[UUID, Skill] = {s.id: s for s in skills if s.id}
-        to_process = [s for s in skills if s.id]
+        to_process: deque[Skill] = deque(s for s in skills if s.id)
 
         _upward_types = {SkillRelationType.BELONGS_TO, SkillRelationType.REQUIRES}
 
         while to_process:
-            current_skill = to_process.pop(0)
+            current_skill = to_process.popleft()
             full_skill = skill_graph.get(current_skill.id) if current_skill.id else None
             if not full_skill:
                 continue
@@ -436,16 +316,77 @@ class ProfileUserFromCVUseCase:
 
         return list(inferred_skills.values())
 
+    async def _enrich_skills_evidence(
+        self, cv_text: str, raw_skill_names: list[str]
+    ) -> list[dict[str, Any]] | list[str]:
+        """Phase 1.5: Enrich raw skill names with evidence via a second LLM call.
+
+        Returns a list of dicts with evidence for each skill (name, category,
+        years_of_experience, personal_projects, has_certification).
+        If the LLM call fails, returns the original list of skill names as-is.
+        """
+        if not raw_skill_names:
+            return raw_skill_names
+
+        logger.info(
+            "Phase 1.5 — enriching skills evidence",
+            skill_count=len(raw_skill_names),
+        )
+        try:
+            prompt = _build_skill_evidence_prompt(cv_text, raw_skill_names)
+            raw_output = await self._llm.generate(
+                prompt=prompt, context=[], max_tokens=2500
+            )
+            parsed = _parse_cv_extraction_output(raw_output)
+            enriched = parsed.get("skills", [])
+            if not enriched:
+                logger.warning("Phase 1.5 returned empty skills list, using originals")
+                return raw_skill_names
+            return enriched
+        except Exception as exc:
+            logger.warning(
+                "Phase 1.5 LLM enrichment failed, using original skill names",
+                error=str(exc),
+            )
+            return raw_skill_names
+
     async def execute(
         self,
         user_id: UUID,
         cv_id: UUID,
         cv_content: bytes,
         content_type: str,
+        on_phase1_complete: "Callable[[UUID], Awaitable[None]] | None" = None,
     ) -> UserProfileDTO:
+        """Run the 3-phase CV analysis pipeline.
+
+        Phase 1 — Profile Extraction (~5-8s):
+            1. Extract text from CV file.
+            2. Classify document as CV via heuristic.
+            3. Run lightweight LLM extraction (role, summary, years, flat skill names).
+            4. Persist basic profile (no diagnostics yet).
+            5. Call ``on_phase1_complete`` so the caller can mark the CV as
+               'completed' and let the frontend know the profile is ready.
+
+        Phase 1.5 — Skill Evidence Enrichment (~10-15s, after Phase 1 callback):
+            6. Second LLM call to enrich each skill with category, years of
+               experience, personal projects, and certification evidence.
+
+        Phase 2 — Diagnosis (~3-5s, continues after Phase 1.5):
+            7. Normalise user skills against the canonical catalog.
+            8. Upward-inference on the skill knowledge graph.
+            9. Load active clusters and compute Weighted Jaccard affinity.
+            10. Detect skill gaps vs primary cluster.
+            11. Persist enriched profile with ``is_diagnosed=True``.
+
+        The three-phase design lets the frontend render a useful profile in < 10s
+        while skill evidence enrichment and diagnosis finish silently in the background.
+        """
         try:
-            # Step 1: Extract text
-            logger.info("Extracting CV text", user_id=str(user_id))
+            # ── Phase 1: Fast LLM extraction ─────────────────────────────────
+
+            # Step 1: Extract text from CV
+            logger.info("Phase 1 — extracting CV text", user_id=str(user_id))
             cv_text = await self._cv_parser.extract_text(cv_content, content_type)
 
             if not cv_text.strip():
@@ -458,65 +399,34 @@ class ProfileUserFromCVUseCase:
                     "The uploaded document does not appear to be a professional CV/resume. "
                     "Please upload a document with your work experience, education, and skills."
                 )
-            logger.debug(
-                "Document classified as CV",
-                confidence=confidence,
-            )
+            logger.debug("Document classified as CV", confidence=confidence)
 
-            # Step 2: Run LLM structured extraction
-            logger.info("Extracting structured info using LLM")
-            try:
-                prompt = _build_cv_extraction_prompt(cv_text)
-                raw_llm_output = await self._llm.generate(prompt=prompt, context=[])
-                extracted_data = _parse_cv_extraction_output(raw_llm_output)
-                if not extracted_data:
-                    # If empty dict returned from parsing, treat as fallback trigger
-                    raise ValueError("Empty extraction data parsed")
-                # Check if LLM flagged the document as not a CV
-                if "error" in extracted_data and extracted_data["error"] == "not_a_cv":
-                    doc_type = extracted_data.get("document_type", "unknown")
-                    raise MLPipelineError(
-                        f"The uploaded document does not appear to be a CV/resume "
-                        f"(detected as: {doc_type}). "
-                        "Please upload a document with your work experience, education, and skills."
-                    )
-            except MLPipelineError:
-                raise
-            except Exception as e:
-                logger.warning(
-                    "LLM structured extraction failed, using mock profile data fallback",
-                    error=str(e),
+            # Step 2: Run LLM structured extraction (lightweight).
+            # Truncate to 4000 chars to handle 2-page CVs while keeping
+            # the context window responsive. max_tokens=1000 is enough
+            # since this phase only extracts role, summary, years, and flat skill names.
+            logger.info("Phase 1 — LLM structured extraction", user_id=str(user_id))
+            CV_TEXT_CHAR_LIMIT = 4000
+            cv_text_for_llm = cv_text[:CV_TEXT_CHAR_LIMIT]
+            prompt = _build_cv_extraction_prompt(cv_text_for_llm)
+            raw_llm_output = await self._llm.generate(
+                prompt=prompt, context=[], max_tokens=1000
+            )
+            extracted_data = _parse_cv_extraction_output(raw_llm_output)
+            if not extracted_data:
+                raise ValueError("Empty extraction data parsed")
+            if "error" in extracted_data and extracted_data["error"] == "not_a_cv":
+                doc_type = extracted_data.get("document_type", "unknown")
+                raise MLPipelineError(
+                    f"The uploaded document does not appear to be a CV/resume "
+                    f"(detected as: {doc_type}). "
+                    "Please upload a document with your work experience, education, and skills."
                 )
-                extracted_data = _FALLBACK_CV_EXTRACTION_DATA
 
-            # Step 3: Embed CV text (mocked as zero vector for schema backwards compatibility)
-            logger.info("Setting CV embedding to static zero vector")
-            cv_embedding = [0.0] * 1024
-
-            # Step 4: Normalize user skills
-            raw_skills = extracted_data.get("skills", {})
-            detected_skills = await self._normalize_user_skills(raw_skills)
-
-            # Step 4b: Perform Upward Inference to detect implicit parent skills
-            detected_skills = await self._expand_with_upward_inference(detected_skills)
-
-            # Step 5: Load active clusters
-            clusters = await self._clusters.get_all_active()
-            if not clusters:
-                raise MLPipelineError("No tech clusters available — run clustering first")
-
-            active_clusters = [c for c in clusters if c.centroid_skills]
-            if not active_clusters:
-                raise MLPipelineError("No active clusters with centroid skills available")
-
-            # Step 6: Compute Weighted Jaccard Similarity per cluster
-            primary, _secondaries, _affinities, _ = compute_affinities_and_domains(
-                detected_skills, active_clusters
-            )
-            if not primary:
-                raise MLPipelineError("No primary cluster affinity computed")
-
-            # Step 7: Seniority estimation
+            # Step 3: Persist Phase 1 profile immediately (no diagnostics, no skills).
+            # This lets the CV status be marked 'completed' right after, so the
+            # frontend polling sees it and renders the profile within ~7s.
+            logger.info("Phase 1 — persisting basic profile", user_id=str(user_id))
             years_exp = extracted_data.get("years_experience")
             if isinstance(years_exp, (int, float)):
                 if years_exp >= 6:
@@ -528,7 +438,130 @@ class ProfileUserFromCVUseCase:
             else:
                 seniority = _estimate_seniority(cv_text)
 
-            # Step 8: Detect and prioritize skill gaps vs primary cluster
+            phase1_profile = UserProfile(
+                user_id=user_id,
+                cv_id=cv_id,
+                embedding=[],
+                detected_skills=[],
+                seniority=seniority,
+                primary_affinity=ClusterAffinity(
+                    cluster_id=uuid4(),
+                    cluster_name="Sin Diagnóstico",
+                    affinity_score=0.0,
+                    is_primary=True,
+                ),
+                secondary_affinities=[],
+                skill_gaps=[],
+                current_job_role=extracted_data.get("current_job_role") or None,
+                professional_summary=extracted_data.get("professional_summary") or None,
+                years_experience=int(years_exp) if isinstance(years_exp, (int, float)) else None,
+                cv_raw_text=cv_text,
+                is_diagnosed=False,
+            )
+            await self._profiles.save_profile(phase1_profile, persist_diagnostics=False)
+
+            # Notify the caller (router) so it can mark the CV as 'completed'
+            # and commit the session — the frontend polling will pick this up.
+            if on_phase1_complete:
+                await on_phase1_complete(cv_id)
+
+            logger.info(
+                "Phase 1 complete — basic profile saved and CV marked completed",
+                user_id=str(user_id),
+            )
+
+            # ── Phase 1.5: Skill evidence enrichment ───────────────────────────
+            # Second LLM call to enrich flat skill names with evidence details.
+            # Runs after the Phase 1 callback so the frontend already sees
+            # status="completed" before this starts.
+            raw_skills = extracted_data.get("skills", [])
+            if raw_skills:
+                logger.info(
+                    "Phase 1.5 — enriching skills evidence",
+                    user_id=str(user_id),
+                    skill_count=len(raw_skills),
+                )
+                raw_skills = await self._enrich_skills_evidence(cv_text, raw_skills)
+
+            # ── Phase 2: Skill enrichment + cluster affinity ──────────────────
+
+            # Embedding (static zero-vector for backwards compatibility)
+            cv_embedding = [0.0] * 1024
+
+            # Normalize user skills (no LLM fallback).
+            # Phase 1.5 enriched skills with evidence; unresolvable skills
+            # default to catalog data.
+            logger.info("Phase 2 — normalising skills", user_id=str(user_id))
+
+            # Load the full skill catalogue once and share it across
+            # resolve_skills and _expand_with_upward_inference to avoid a
+            # redundant DB round-trip.
+            all_skills = await self._skills.get_all_skills()
+            detected_skills = await self._normalize_user_skills(
+                raw_skills,
+                use_llm_fallback=False,
+                existing_skills_cache=all_skills,
+            )
+
+            # Upward inference on the skill graph
+            detected_skills = await self._expand_with_upward_inference(
+                detected_skills,
+                all_skills=all_skills,
+            )
+
+            # Load active clusters
+            clusters = await self._clusters.get_all_active()
+            if not clusters:
+                logger.warning(
+                    "No tech clusters available — skipping Phase 2 diagnosis",
+                    user_id=str(user_id),
+                )
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=phase1_profile.full_name,
+                    message="Profile saved. Diagnosis skipped — no clusters configured.",
+                )
+
+            active_clusters = [c for c in clusters if c.centroid_skills]
+            if not active_clusters:
+                logger.warning(
+                    "No active clusters with centroid skills — skipping Phase 2",
+                    user_id=str(user_id),
+                )
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=phase1_profile.full_name,
+                    message="Profile saved. Diagnosis skipped — clusters have no centroid skills.",
+                )
+
+            # Compute Weighted Jaccard Similarity per cluster
+            primary, _secondaries, _affinities, _ = compute_affinities_and_domains(
+                detected_skills, active_clusters
+            )
+            if not primary:
+                logger.warning(
+                    "No primary cluster affinity — skipping Phase 2",
+                    user_id=str(user_id),
+                )
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=phase1_profile.full_name,
+                    message="Profile saved. Could not compute cluster affinity.",
+                )
+
+            # Detect skill gaps vs primary cluster
             primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
             skill_gaps = []
 
@@ -536,7 +569,6 @@ class ProfileUserFromCVUseCase:
                 user_tech_skills = {
                     s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
                 }
-
                 primary_cluster_tech_skills = [
                     s for s in primary_cluster.centroid_skills if s.nature == SkillNature.TECH
                 ]
@@ -549,25 +581,21 @@ class ProfileUserFromCVUseCase:
                             importance = "high"
                         else:
                             importance = "medium"
-
                         skill_gaps.append(
-                            SkillGap(
-                                skill=skill,
-                                market_importance=importance,
-                            )
+                            SkillGap(skill=skill, market_importance=importance)
                         )
-                # Sort gaps by importance priority
                 skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
-            # Step 9: Persist profile (Only save primary diagnostic initially)
-            profile = UserProfile(
+            # Persist enriched profile with is_diagnosed=True
+            logger.info("Phase 2 — persisting full diagnosis", user_id=str(user_id))
+            diagnosed_profile = UserProfile(
                 user_id=user_id,
                 cv_id=cv_id,
                 embedding=cv_embedding,
                 detected_skills=detected_skills,
                 seniority=seniority,
                 primary_affinity=primary,
-                secondary_affinities=[],  # Only save primary diagnostic initially
+                secondary_affinities=[],
                 skill_gaps=skill_gaps,
                 full_name=extracted_data.get("full_name") or None,
                 current_job_role=extracted_data.get("current_job_role") or None,
@@ -579,21 +607,21 @@ class ProfileUserFromCVUseCase:
                 education=extracted_data.get("education") or [],
                 certifications=extracted_data.get("certifications") or [],
                 cv_raw_text=cv_text,
+                is_diagnosed=True,
             )
-            await self._profiles.save(profile)
+            await self._profiles.save(diagnosed_profile)
 
             logger.info(
-                "Profile generated and saved via Weighted Jaccard",
+                "Phase 2 complete — full diagnosis persisted",
                 user_id=str(user_id),
                 specialty=primary.cluster_name,
                 score=primary.affinity_score,
             )
 
-            # Compute Domain Affinities
+            # Compute Domain Affinities for DTO
             _, _, _, domain_affinities_dto = compute_affinities_and_domains(
                 detected_skills, active_clusters
             )
-
             user_skills_map = {s.normalized_name: s for s in detected_skills}
 
             primary_dto = ClusterAffinityDTO(
@@ -650,7 +678,6 @@ class ProfileUserFromCVUseCase:
                 ],
             )
 
-            # Map DTOs
             return UserProfileDTO(
                 user_id=user_id,
                 cv_id=cv_id,
@@ -689,15 +716,16 @@ class ProfileUserFromCVUseCase:
                     )
                     for g in skill_gaps
                 ],
-                full_name=profile.full_name,
-                current_job_role=profile.current_job_role,
-                years_experience=profile.years_experience,
-                preferred_modality=profile.preferred_modality,
-                location=profile.location,
-                availability=profile.availability,
-                work_experience=profile.work_experience,
-                education=profile.education,
-                certifications=profile.certifications,
+                full_name=diagnosed_profile.full_name,
+                current_job_role=diagnosed_profile.current_job_role,
+                years_experience=diagnosed_profile.years_experience,
+                preferred_modality=diagnosed_profile.preferred_modality,
+                location=diagnosed_profile.location,
+                availability=diagnosed_profile.availability,
+                work_experience=diagnosed_profile.work_experience,
+                education=diagnosed_profile.education,
+                certifications=diagnosed_profile.certifications,
+                is_diagnosed=True,
                 message="Profile generated successfully",
             )
 
@@ -759,10 +787,10 @@ def determine_trend(name: str) -> str:
 
 
 def _build_cv_extraction_prompt(cv_text: str) -> str:
-    """Build structured prompt for LLM CV extraction.
+    """Build structured prompt for Phase 1 LLM CV extraction.
 
-    The prompt instructs the LLM to first verify the document is a CV/resume
-    before attempting extraction, preventing hallucination on non-CV content.
+    Lightweight extraction: role, summary, years, and skills as flat strings.
+    Skills evidence enrichment happens in a separate Phase 1.5 call.
     """
     return f"""You are a professional CV analyzer.
 
@@ -773,22 +801,10 @@ If the text is NOT a CV (e.g., it is an invoice, letter, contract, terms of serv
 {{"error": "not_a_cv", "document_type": "<brief description of what the document appears to be>"}}
 
 If the text IS a CV, extract the following details in a structured JSON format:
-1. Full Name (full_name)
-2. Current Job Role (current_job_role)
-3. Years of experience (years_experience, integer)
-4. Preferred modality (preferred_modality: 'Remota', 'Híbrida', 'Presencial', 'Remota / Híbrida' etc)
-5. Location (location: 'City, Country')
-6. Availability (availability: e.g. 'Inmediata', '1 mes', etc)
-7. Work experience (work_experience: list of objects with company, role, description, start_date, end_date, current (bool))
-8. Education (education: list of objects with institution, degree, start_date, end_date)
-9. Certifications (certifications: list of objects with name, issuer, date)
-10. Technical & Soft Skills (skills: list of objects). You MUST extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, architecture, and soft skill mentioned in the CV. Do NOT summarize, group, or omit any. Even if a technology is only mentioned once, extract it. The skills list should be exhaustive (typically containing 30+ items for a technical profile). For each skill, identify:
-    - name (the name of the skill, e.g., Python, Docker, Scrum, Liderazgo)
-    - category (one of: 'technical', 'soft', 'tools', 'methodologies')
-    - self_taught (boolean: true if the CV mentions taking courses, bootcamps, or learning this self-taught/autodidacta)
-    - personal_projects (boolean: true if the skill is used in personal projects or open source contributions mentioned in the CV)
-    - years_of_experience (integer: the number of years the candidate has used this skill in work experience)
-    - has_certification (boolean: true if there is an official certification in the CV matching this skill)
+1. Current Job Role (current_job_role)
+2. Professional Summary (professional_summary): a 1-2 sentence summary of the candidate's profile
+3. Years of experience (years_experience, integer): total years of professional experience
+4. Technical & Soft Skills (skills): list of skill NAMES as flat strings. Extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, architecture, and soft skill mentioned in the CV. Do NOT summarize, group, or omit any. The list should be exhaustive (typically 20-50 items for a technical profile).
 
 CV Text:
 {cv_text}
@@ -796,44 +812,47 @@ CV Text:
 Respond ONLY with a valid JSON object. If the text is not a CV, use the error format above.
 If it IS a CV, use this schema:
 {{
-  "full_name": "string or null",
   "current_job_role": "string or null",
+  "professional_summary": "string or null",
   "years_experience": integer or null,
-  "preferred_modality": "string or null",
-  "location": "string or null",
-  "availability": "string or null",
-  "work_experience": [
-    {{
-      "company": "string",
-      "role": "string",
-      "description": "string",
-      "start_date": "string",
-      "end_date": "string or null",
-      "current": boolean
-    }}
-  ],
-  "education": [
-    {{
-      "institution": "string",
-      "degree": "string",
-      "start_date": "string",
-      "end_date": "string or null"
-    }}
-  ],
-  "certifications": [
-    {{
-      "name": "string",
-      "issuer": "string or null",
-      "date": "string or null"
-    }}
-  ],
+  "skills": ["string", "string", ...]
+}}"""
+
+
+def _build_skill_evidence_prompt(cv_text: str, skill_names: list[str]) -> str:
+    """Build prompt for Phase 1.5 skill evidence enrichment.
+
+    Takes the CV text and the list of skill names from Phase 1, asks the LLM
+    to extract evidence details (category, years of experience, etc.) for each.
+    """
+    skill_list = "\n".join(f"- {s}" for s in skill_names)
+    return f"""You are a professional CV analyzer.
+
+Given the CV text below and a list of skill names extracted from it, find evidence in the CV for each skill and return a JSON object with a "skills" array.
+
+For each skill, extract:
+- name: the skill name exactly as provided
+- category: one of "technical" (languages, databases, frameworks, cloud), "soft" (soft skills), "tools" (software/tools), "methodologies" (methodologies, architectures)
+- years_of_experience: integer, estimated years the candidate has used this skill based on work experience dates
+- personal_projects: boolean, true if the CV mentions using this skill in personal or open-source projects
+- has_certification: boolean, true if the CV mentions an official certification for this skill
+
+Be precise. Only set personal_projects or has_certification to true if there is explicit evidence in the CV text.
+
+CV Text:
+{cv_text}
+
+Skills to analyze:
+{skill_list}
+
+Respond ONLY with a valid JSON object using this exact schema:
+{{
   "skills": [
     {{
       "name": "string",
       "category": "technical | soft | tools | methodologies",
-      "self_taught": boolean,
-      "personal_projects": boolean,
       "years_of_experience": integer,
+      "personal_projects": boolean,
       "has_certification": boolean
     }}
   ]
@@ -1668,6 +1687,7 @@ class GetMyProfileUseCase:
             ],
             full_name=profile.full_name,
             current_job_role=profile.current_job_role,
+            professional_summary=profile.professional_summary,
             years_experience=profile.years_experience,
             preferred_modality=profile.preferred_modality,
             location=profile.location,
@@ -1675,6 +1695,7 @@ class GetMyProfileUseCase:
             work_experience=profile.work_experience,
             education=profile.education,
             certifications=profile.certifications,
+            is_diagnosed=profile.is_diagnosed,
             message="Profile retrieved successfully",
         )
 

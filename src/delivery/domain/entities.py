@@ -31,6 +31,7 @@ class CVDocument:
     content_type: str
     size_bytes: int
     status: str = "processing"
+    error_message: str | None = None
     uploaded_at: datetime = field(default_factory=datetime.utcnow)
 
     @property

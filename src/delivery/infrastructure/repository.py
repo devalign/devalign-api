@@ -106,8 +106,11 @@ class SQLAlchemyCVRepository(CVRepository):
             await self._session.delete(model)
             await self._session.flush()
 
-    async def update_status(self, cv_id: UUID, status: str) -> None:
+    async def update_status(self, cv_id: UUID, status: str, error_message: str | None = None) -> None:
+        values: dict[str, object] = {"status": status}
+        if error_message is not None:
+            values["error_message"] = error_message
         await self._session.execute(
-            update(CVDocumentModel).where(CVDocumentModel.id == cv_id).values(status=status)
+            update(CVDocumentModel).where(CVDocumentModel.id == cv_id).values(values)
         )
         await self._session.flush()

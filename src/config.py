@@ -74,12 +74,15 @@ class Settings(BaseSettings):
                 else:
                     data["LLM_PROVIDER"] = "groq"
 
-            # Set default model based on the selected or overridden provider
+            # Set default model based on the selected or overridden provider.
+            # Also corrects incompatible models when switching providers via .env.
             prov = data.get("LLM_PROVIDER")
-            if "LLM_MODEL" not in data or not data["LLM_MODEL"]:
-                if prov == "openai":
+            model = data.get("LLM_MODEL", "")
+            if prov == "openai":
+                if not model or not model.startswith(("gpt-", "o1", "o3")):
                     data["LLM_MODEL"] = "gpt-4o-mini"
-                else:
+            else:
+                if not model or not model.startswith(("llama", "mixtral", "deepseek", "qwen")):
                     data["LLM_MODEL"] = "llama-3.3-70b-versatile"
         return data
 

@@ -15,8 +15,23 @@ class SkillCatalogService:
         self._skills = skill_repository
         self._llm = llm_service
 
-    async def resolve_skills(self, raw_strings: list[str]) -> list[Skill]:
-        """Resolves a list of raw skill strings to canonical Skill entities."""
+    async def resolve_skills(
+        self,
+        raw_strings: list[str],
+        use_llm_fallback: bool = True,
+        existing_skills_cache: list[Skill] | None = None,
+    ) -> list[Skill]:
+        """Resolves a list of raw skill strings to canonical Skill entities.
+
+        Args:
+            raw_strings: Raw skill strings extracted from the CV.
+            use_llm_fallback: Whether to use the LLM to classify unresolved
+                skills.  Phase 2 enrichment sets this to False to avoid an
+                extra LLM call.
+            existing_skills_cache: Pre-loaded skill catalogue to avoid a
+                redundant DB round-trip.  If omitted the catalogue is loaded
+                from the database.
+        """
         # Clean inputs
         clean_strings = []
         for raw_str in raw_strings:
@@ -26,10 +41,11 @@ class SkillCatalogService:
         if not clean_strings:
             return []
 
-        # 1. Load existing skills to check cache
-        # In a real heavy app, we might just query the DB for the specific aliases.
-        # But we'll use get_all_skills for now to keep it simple.
-        existing_skills = await self._skills.get_all_skills()
+        # 1. Load existing skills (use cache if provided to avoid double load)
+        if existing_skills_cache is not None:
+            existing_skills = existing_skills_cache
+        else:
+            existing_skills = await self._skills.get_all_skills()
 
         # Build lookup maps
         alias_to_skill = {}
@@ -54,7 +70,7 @@ class SkillCatalogService:
                 else:
                     unresolved_strings.append(raw)
 
-        if not unresolved_strings:
+        if not unresolved_strings or not use_llm_fallback:
             # Deduplicate by ID
             return list({sk.id: sk for sk in resolved_skills}.values())
 
