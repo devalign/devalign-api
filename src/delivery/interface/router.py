@@ -306,6 +306,23 @@ async def run_profile_analysis_task(
                 user_id=str(user_id),
                 error=str(db_exc),
             )
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2**attempt)
+
+    bg_logger.exception(
+        "Background CV analysis failed after all retries",
+        user_id=str(user_id),
+        error=str(last_exception),
+    )
+    try:
+        async with AsyncSessionLocal() as fail_session:
+            cv_repo = SQLAlchemyCVRepository(fail_session)
+            await cv_repo.update_status(cv_id, "failed")
+            await fail_session.commit()
+    except Exception as db_exc:
+        bg_logger.exception(
+            "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
+        )
 
 
 
