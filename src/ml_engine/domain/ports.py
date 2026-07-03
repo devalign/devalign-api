@@ -11,8 +11,21 @@ class LLMService(ABC):
     """Port for interacting with LLM APIs."""
 
     @abstractmethod
-    async def generate(self, prompt: str, context: list[Any] | None = None) -> str:
-        """Generate text from a prompt with optional context."""
+    async def generate(
+        self,
+        prompt: str,
+        context: list[Any] | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Generate text from a prompt with optional context.
+
+        Args:
+            prompt: The user instruction / task description.
+            context: Optional list of prior messages for multi-turn conversations.
+            max_tokens: Hard cap on output tokens. Passing a lower value reduces
+                        LLM latency significantly — use ~1500 for structured CV
+                        extraction and ~600 for skill classification.
+        """
         ...
 
 
@@ -60,6 +73,15 @@ class UserProfileRepository(ABC):
     async def save(self, profile: UserProfile) -> UserProfile:
         """Persist a user profile."""
         ...
+
+    async def save_profile(
+        self,
+        profile: UserProfile,
+        *,
+        persist_diagnostics: bool = True,
+    ) -> UserProfile:
+        """Persist a profile snapshot, optionally skipping diagnostics."""
+        return await self.save(profile)
 
     @abstractmethod
     async def get_by_user_id(self, user_id: UUID) -> UserProfile | None:

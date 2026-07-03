@@ -1,7 +1,7 @@
 """Delivery module API router."""
 
 import asyncio
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
@@ -16,6 +16,7 @@ from src.delivery.application.use_cases import (
 from src.delivery.infrastructure.repository import SQLAlchemyCVRepository, SQLAlchemyUserRepository
 from src.delivery.infrastructure.supabase_storage import SupabaseStorageService
 from src.dependencies import SessionDep
+from src.ml_engine.domain.entities import ClusterAffinity, SeniorityLevel, UserProfile
 from src.ml_engine.application.dtos import ProfileUpdateDTO
 
 # ML Engine imports for profile unifications
@@ -42,6 +43,47 @@ def _get_list_cvs_use_case(session: SessionDep) -> ListUserCVsUseCase:
         cv_repository=SQLAlchemyCVRepository(session),
         storage_service=SupabaseStorageService(get_supabase_admin_client()),
     )
+
+
+async def _save_processing_profile_draft(
+    session: SessionDep,
+    user_id: UUID,
+    cv_id: UUID,
+) -> None:
+    """Persist a lightweight profile shell so the profile page can render immediately."""
+    profile_repo = SQLUserProfileRepository(session)
+    existing_profile = await profile_repo.get_by_user_id(user_id)
+    if existing_profile:
+        return
+
+    draft_profile = UserProfile(
+        user_id=user_id,
+        cv_id=cv_id,
+        embedding=[],
+        detected_skills=[],
+        seniority=SeniorityLevel.JUNIOR,
+        primary_affinity=ClusterAffinity(
+            cluster_id=uuid4(),
+            cluster_name="Sin Diagnóstico",
+            affinity_score=0.0,
+            is_primary=True,
+        ),
+        secondary_affinities=[],
+        skill_gaps=[],
+        full_name=None,
+        current_job_role=None,
+        years_experience=None,
+        preferred_modality=None,
+        location=None,
+        availability=None,
+        work_experience=[],
+        education=[],
+        certifications=[],
+        cv_raw_text=None,
+    )
+
+    await profile_repo.save(draft_profile)
+    await session.commit()
 
 
 @router.get("", response_model=MLUserProfileDTO, summary="Get current user profile")
@@ -121,6 +163,7 @@ async def update_my_profile(
     for field in [
         "full_name",
         "current_job_role",
+        "professional_summary",
         "years_experience",
         "preferred_modality",
         "location",
@@ -162,6 +205,10 @@ async def upload_cv(
         content_type=file.content_type or "application/octet-stream",
     )
 
+    # If the user does not have a profile yet, persist a minimal draft immediately.
+    # This lets the profile page resolve a non-empty state before the full analysis finishes.
+    await _save_processing_profile_draft(session, UUID(current_user_id), result.cv_id)
+
     # Queue background task to run profile analysis
     background_tasks.add_task(
         run_profile_analysis_task,
@@ -180,9 +227,16 @@ async def run_profile_analysis_task(
     content: bytes,
     content_type: str,
 ) -> None:
+    """Run the 2-phase CV analysis pipeline as a FastAPI background task.
+
+    Phase 1 callback marks the CV as 'completed' mid-pipeline so the frontend
+    polling detects it quickly (~6–9s). Phase 2 (skill enrichment + diagnosis)
+    continues silently after the callback.
+    """
     import structlog
 
     from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
+    from src.shared.exceptions import RateLimitError
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
     from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
     from src.ml_engine.infrastructure.llm_client import get_llm_service
@@ -191,64 +245,68 @@ async def run_profile_analysis_task(
     from src.shared.database import AsyncSessionLocal
 
     bg_logger = structlog.get_logger("background_tasks")
-    bg_logger.info("Starting background CV analysis", user_id=str(user_id), cv_id=str(cv_id))
+    bg_logger.info("Starting 2-phase CV analysis", user_id=str(user_id), cv_id=str(cv_id))
 
-    max_retries = 3
-    last_exception: Exception | None = None
+    try:
+        async with AsyncSessionLocal() as session:
+            cv_repo = SQLAlchemyCVRepository(session)
+            await cv_repo.update_status(cv_id, "processing")
+            await session.commit()
 
-    for attempt in range(max_retries):
-        try:
-            async with AsyncSessionLocal() as session:
-                cv_repo = SQLAlchemyCVRepository(session)
-                await cv_repo.update_status(cv_id, "processing")
-                await session.commit()
+            use_case = ProfileUserFromCVUseCase(
+                cv_parser=LocalCVParserService(),
+                cluster_repository=SQLClusterRepository(session),
+                profile_repository=SQLUserProfileRepository(session),
+                llm_service=get_llm_service(),
+                skill_repository=SQLSkillRepository(session),
+            )
 
-                use_case = ProfileUserFromCVUseCase(
-                    cv_parser=LocalCVParserService(),
-                    cluster_repository=SQLClusterRepository(session),
-                    profile_repository=SQLUserProfileRepository(session),
-                    llm_service=get_llm_service(),
-                    skill_repository=SQLSkillRepository(session),
-                )
-                await use_case.execute(
-                    user_id=user_id,
-                    cv_id=cv_id,
-                    cv_content=content,
-                    content_type=content_type,
-                )
-                await cv_repo.update_status(cv_id, "completed")
+            async def on_phase1_complete(completed_cv_id: UUID) -> None:
+                """Commit Phase 1 data and mark CV as 'completed' for frontend polling."""
+                await cv_repo.update_status(completed_cv_id, "completed")
                 await session.commit()
                 bg_logger.info(
-                    "Background CV analysis completed successfully",
+                    "Phase 1 committed — CV marked completed, profile visible to user",
                     user_id=str(user_id),
+                    cv_id=str(completed_cv_id),
                 )
-                return
-        except Exception as exc:
-            last_exception = exc
-            bg_logger.warning(
-                "Background CV analysis attempt failed",
-                attempt=attempt + 1,
-                max_retries=max_retries,
-                user_id=str(user_id),
-                error=str(exc),
-            )
-            if attempt < max_retries - 1:
-                await asyncio.sleep(2**attempt)
 
-    bg_logger.exception(
-        "Background CV analysis failed after all retries",
-        user_id=str(user_id),
-        error=str(last_exception),
-    )
-    try:
-        async with AsyncSessionLocal() as fail_session:
-            cv_repo = SQLAlchemyCVRepository(fail_session)
-            await cv_repo.update_status(cv_id, "failed")
-            await fail_session.commit()
-    except Exception as db_exc:
+            await use_case.execute(
+                user_id=user_id,
+                cv_id=cv_id,
+                cv_content=content,
+                content_type=content_type,
+                on_phase1_complete=on_phase1_complete,
+            )
+            # Phase 2 has already committed inside the use case via session.
+            # A final commit here ensures any remaining dirty state is flushed.
+            await session.commit()
+            bg_logger.info(
+                "Phase 2 complete — full diagnosis persisted",
+                user_id=str(user_id),
+            )
+    except Exception as exc:
+        is_rate_limit = isinstance(exc, RateLimitError)
+        error_msg = str(exc) if is_rate_limit else None
         bg_logger.exception(
-            "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
+            "CV analysis background task failed",
+            user_id=str(user_id),
+            cv_id=str(cv_id),
+            error=str(exc),
+            is_rate_limit=is_rate_limit,
         )
+        try:
+            async with AsyncSessionLocal() as fail_session:
+                cv_repo = SQLAlchemyCVRepository(fail_session)
+                await cv_repo.update_status(cv_id, "failed", error_message=error_msg)
+                await fail_session.commit()
+        except Exception as db_exc:
+            bg_logger.exception(
+                "Failed to update CV status to failed",
+                user_id=str(user_id),
+                error=str(db_exc),
+            )
+
 
 
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
@@ -265,8 +323,12 @@ async def get_cv_status(
     cvs.sort(key=lambda x: x.uploaded_at, reverse=True)
     latest_cv = cvs[0]
 
+    error_message = getattr(latest_cv, "error_message", None) or None
     return CVStatusDTO(
-        cv_id=latest_cv.id, status=latest_cv.status, uploaded_at=latest_cv.uploaded_at
+        cv_id=latest_cv.id,
+        status=latest_cv.status,
+        uploaded_at=latest_cv.uploaded_at,
+        error_message=error_message,
     )
 
 

@@ -1,5 +1,6 @@
 """CV parser implementation using pypdf and python-docx."""
 
+import asyncio
 import io
 
 import structlog
@@ -16,11 +17,11 @@ class LocalCVParserService(CVParserService):
     async def extract_text(self, content: bytes, content_type: str) -> str:
         """Dispatch to the appropriate parser based on content type."""
         if content_type == "application/pdf":
-            return self._extract_from_pdf(content)
+            return await asyncio.to_thread(self._extract_from_pdf, content)
         elif content_type == (
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ):
-            return self._extract_from_docx(content)
+            return await asyncio.to_thread(self._extract_from_docx, content)
         else:
             raise MLPipelineError(f"Unsupported content type for parsing: {content_type}")
 

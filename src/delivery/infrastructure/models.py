@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -74,6 +74,7 @@ class CVDocumentModel(Base):
     content_type: Mapped[str] = mapped_column(String(128), nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="processing")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
@@ -89,6 +90,7 @@ class CVDocumentModel(Base):
             content_type=self.content_type,
             size_bytes=self.size_bytes,
             status=self.status,
+            error_message=self.error_message,
             uploaded_at=self.uploaded_at,
         )
 

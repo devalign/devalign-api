@@ -123,7 +123,19 @@ class SkillGap:
 
 @dataclass(frozen=True)
 class UserProfile:
-    """The computed profile of a developer based on their CV."""
+    """The computed profile of a developer based on their CV.
+
+    Three-phase lifecycle:
+    - Phase 1 (is_diagnosed=False): lightweight LLM extraction of role, summary,
+      years of experience, and skill names. The CV document status is set to
+      ``completed`` once Phase 1 finishes so the frontend can render the profile.
+    - Phase 1.5: second LLM call to enrich each skill with evidence (category,
+      years of experience, personal projects, certifications). Runs silently
+      after the Phase 1 callback.
+    - Phase 2 (is_diagnosed=True): full skill normalisation, knowledge-graph
+      upward inference, cluster affinity and skill-gap computation. The profile
+      is re-saved with ``is_diagnosed=True`` once this phase completes.
+    """
 
     user_id: UUID
     cv_id: UUID | None
@@ -135,6 +147,7 @@ class UserProfile:
     skill_gaps: list[SkillGap] = field(default_factory=list)
     full_name: str | None = None
     current_job_role: str | None = None
+    professional_summary: str | None = None
     years_experience: int | None = None
     preferred_modality: str | None = None
     location: str | None = None
@@ -144,6 +157,8 @@ class UserProfile:
     certifications: list[dict[str, Any]] = field(default_factory=list)
     cv_raw_text: str | None = None
     last_analysis_date: datetime | None = None
+    # True once Phase 2 (skill enrichment + cluster affinity) has been persisted.
+    is_diagnosed: bool = False
 
     @property
     def primary_specialty(self) -> str:

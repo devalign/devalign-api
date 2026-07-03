@@ -76,6 +76,13 @@ class ExternalServiceError(DevalignException):
     detail = "External service unavailable"
 
 
+class RateLimitError(ExternalServiceError):
+    """Raised when an external service rate limit is exceeded (e.g. Groq/OpenAI 429)."""
+
+    status_code = HTTPStatus.TOO_MANY_REQUESTS
+    detail = "Rate limit exceeded for external service"
+
+
 class MLPipelineError(DevalignException):
     """Raised when the ML inference pipeline fails."""
 

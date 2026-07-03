@@ -26,6 +26,7 @@ engine: AsyncEngine = create_async_engine(
     pool_pre_ping=True,  # Check connection health before use
     pool_size=10,
     max_overflow=20,
+    pool_timeout=10,  # Fail fast instead of waiting 30s default
 )
 
 # Session factory

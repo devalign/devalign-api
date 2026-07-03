@@ -230,6 +230,7 @@ class ProfileModel(Base):
     )
     full_name: Mapped[str | None] = mapped_column(String(150), nullable=True)
     current_job_role: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    professional_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     years_experience: Mapped[int | None] = mapped_column(nullable=True)
     preferred_modality: Mapped[str | None] = mapped_column(String(50), nullable=True)
     cv_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -248,6 +249,11 @@ class ProfileModel(Base):
     )
     location: Mapped[str | None] = mapped_column(String(100), nullable=True)
     availability: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # True once Phase 2 (skill normalisation + cluster affinity) is complete.
+    # False means only basic profile fields are populated (Phase 1).
+    is_diagnosed: Mapped[bool] = mapped_column(
+        nullable=False, server_default="false"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -1,0 +1,1 @@
+Senior Software Engineer with 10 years of experience in Python, Django, and FastAPI. Led teams of 5+ engineers. Built scalable microservices architectures using Docker and Kubernetes.

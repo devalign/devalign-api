@@ -1,5 +1,6 @@
 """Supabase Storage adapter for CV uploads."""
 
+import asyncio
 import contextlib
 import re
 import time
@@ -41,6 +42,10 @@ class SupabaseStorageService(StorageService):
     def __init__(self, client: Client) -> None:
         self._client = client
 
+    async def _run_sync(self, fn, *args, **kwargs):
+        """Run a synchronous Supabase client call in a thread to avoid blocking the event loop."""
+        return await asyncio.to_thread(fn, *args, **kwargs)
+
     async def upload_cv(
         self,
         user_id: UUID,
@@ -56,10 +61,11 @@ class SupabaseStorageService(StorageService):
 
         # Ensure the bucket exists
         with contextlib.suppress(Exception):
-            self._client.storage.create_bucket(CV_BUCKET, options={"public": False})
+            await self._run_sync(self._client.storage.create_bucket, CV_BUCKET, options={"public": False})
 
         try:
-            self._client.storage.from_(CV_BUCKET).upload(
+            await self._run_sync(
+                self._client.storage.from_(CV_BUCKET).upload,
                 path=storage_path,
                 file=content,
                 file_options={"content-type": content_type, "upsert": "true"},
@@ -81,7 +87,8 @@ class SupabaseStorageService(StorageService):
                 return url
 
         try:
-            result = self._client.storage.from_(CV_BUCKET).create_signed_url(
+            result = await self._run_sync(
+                self._client.storage.from_(CV_BUCKET).create_signed_url,
                 path=storage_path,
                 expires_in=expires_in,
             )
@@ -96,7 +103,10 @@ class SupabaseStorageService(StorageService):
     async def download_cv(self, storage_path: str) -> bytes:
         """Download CV file content from storage."""
         try:
-            return cast("bytes", self._client.storage.from_(CV_BUCKET).download(storage_path))
+            return cast(
+                "bytes",
+                await self._run_sync(self._client.storage.from_(CV_BUCKET).download, storage_path),
+            )
         except Exception as exc:
             logger.error("Supabase storage download failed", path=storage_path, error=str(exc))
             raise ExternalServiceError("Failed to download CV from storage") from exc
@@ -104,7 +114,7 @@ class SupabaseStorageService(StorageService):
     async def delete_cv(self, storage_path: str) -> None:
         """Delete CV file from storage and clear cached URL if exists."""
         try:
-            self._client.storage.from_(CV_BUCKET).remove([storage_path])
+            await self._run_sync(self._client.storage.from_(CV_BUCKET).remove, [storage_path])
             self._url_cache.pop(storage_path, None)
             logger.info("CV deleted from storage", path=storage_path)
         except Exception as exc:
