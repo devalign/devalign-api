@@ -1,5 +1,6 @@
 """PostgreSQL repository implementation for delivery module."""
 
+from typing import Any
 from uuid import UUID
 
 import structlog
@@ -57,10 +58,29 @@ class SQLAlchemyCVRepository(CVRepository):
         self._session = session
 
     async def save(self, cv: CVDocument) -> CVDocument:
-        model = CVDocumentModel.from_entity(cv)
-        self._session.add(model)
-        await self._session.flush()
-        return model.to_entity()
+        existing = await self.get_by_id(cv.id)
+        if existing:
+            stmt = (
+                update(CVDocumentModel)
+                .where(CVDocumentModel.id == cv.id)
+                .values(
+                    storage_path=cv.storage_path,
+                    original_filename=cv.original_filename,
+                    content_type=cv.content_type,
+                    size_bytes=cv.size_bytes,
+                    status=cv.status,
+                    error_message=cv.error_message,
+                    extracted_data=cv.extracted_data,
+                )
+            )
+            await self._session.execute(stmt)
+            await self._session.flush()
+            return cv
+        else:
+            model = CVDocumentModel.from_entity(cv)
+            self._session.add(model)
+            await self._session.flush()
+            return model.to_entity()
 
     async def get_by_user_id(self, user_id: UUID, limit: int | None = None) -> list[CVDocument]:
         stmt = (
@@ -106,11 +126,23 @@ class SQLAlchemyCVRepository(CVRepository):
             await self._session.delete(model)
             await self._session.flush()
 
-    async def update_status(self, cv_id: UUID, status: str, error_message: str | None = None) -> None:
+    async def update_extracted_data(self, cv_id: UUID, extracted_data: dict[str, Any]) -> int:
+        result = await self._session.execute(
+            update(CVDocumentModel)
+            .where(CVDocumentModel.id == cv_id)
+            .values(extracted_data=extracted_data)
+        )
+        await self._session.flush()
+        return int(result.rowcount)  # type: ignore
+
+    async def update_status(
+        self, cv_id: UUID, status: str, error_message: str | None = None
+    ) -> int:
         values: dict[str, object] = {"status": status}
         if error_message is not None:
             values["error_message"] = error_message
-        await self._session.execute(
+        result = await self._session.execute(
             update(CVDocumentModel).where(CVDocumentModel.id == cv_id).values(values)
         )
         await self._session.flush()
+        return int(result.rowcount)  # type: ignore

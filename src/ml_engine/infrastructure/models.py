@@ -251,9 +251,7 @@ class ProfileModel(Base):
     availability: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # True once Phase 2 (skill normalisation + cluster affinity) is complete.
     # False means only basic profile fields are populated (Phase 1).
-    is_diagnosed: Mapped[bool] = mapped_column(
-        nullable=False, server_default="false"
-    )
+    is_diagnosed: Mapped[bool] = mapped_column(nullable=False, server_default="false")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

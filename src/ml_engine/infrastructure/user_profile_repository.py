@@ -70,12 +70,58 @@ class SQLUserProfileRepository(UserProfileRepository):
         profile_model.cv_raw_text = profile.cv_raw_text
         profile_model.is_diagnosed = profile.is_diagnosed
 
+        # 2. Save Global Profile Skills (profile_skills).
+        # When persist_diagnostics=False, only persist if there are actual skills
+        # (Phase 1 saves with empty detected_skills and should not wipe existing ones).
+        if persist_diagnostics or profile.detected_skills:
+            await self._session.execute(
+                delete(ProfileSkillModel).where(
+                    ProfileSkillModel.profile_id == profile_model.profile_id
+                )
+            )
+
+            profile_skill_names = [s.name for s in profile.detected_skills]
+            db_profile_skills = {}
+            if profile_skill_names:
+                db_profile_skills_result = await self._session.execute(
+                    select(SkillModel).where(SkillModel.name.in_(profile_skill_names))
+                )
+                db_profile_skills = {
+                    m.name.lower(): m for m in db_profile_skills_result.scalars().all()
+                }
+
+            for skill in profile.detected_skills:
+                norm_name = skill.name.lower()
+                if norm_name not in db_profile_skills:
+                    new_skill_model = SkillModel(
+                        skill_id=uuid4(),
+                        name=skill.name,
+                        nature=skill.nature.value if skill.nature else SkillNature.TECH.value,
+                        weight=skill.weight,
+                        domain_tags=skill.domain_tags or [],
+                        core_domains=skill.core_domains or [],
+                    )
+                    self._session.add(new_skill_model)
+                    db_profile_skills[norm_name] = new_skill_model
+
+                profile_skill_rel = ProfileSkillModel(
+                    profile_skill_id=uuid4(),
+                    profile_id=profile_model.profile_id,
+                    skill_id=db_profile_skills[norm_name].skill_id,
+                    self_taught=skill.self_taught,
+                    personal_projects=skill.personal_projects,
+                    years_of_experience=skill.years_of_experience,
+                    has_certification=skill.has_certification,
+                    ict_score=skill.calculate_ict(),
+                )
+                self._session.add(profile_skill_rel)
+
+        await self._session.flush()
+
         if not persist_diagnostics:
-            await self._session.flush()
             return profile
 
-        # 2. Save Diagnostics — batch all operations before flush
-        # Delete existing diagnostics to prevent database bloat and timeouts
+        # 3. Save Diagnostics — only when persist_diagnostics=True
         await self._session.execute(
             delete(DiagnosticModel).where(DiagnosticModel.profile_id == profile_model.profile_id)
         )
@@ -83,7 +129,6 @@ class SQLUserProfileRepository(UserProfileRepository):
         all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
         all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
 
-        # Collect all skills we need to persist across diagnostics
         all_skill_names: set[str] = set()
         for affinity in all_affinities:
             for s in affinity.detected_skills:
@@ -91,7 +136,6 @@ class SQLUserProfileRepository(UserProfileRepository):
             for g in affinity.skill_gaps:
                 all_skill_names.add(g.skill.name)
 
-        # Fetch existing skills in one query
         db_all_skills = {}
         if all_skill_names:
             db_skills_result = await self._session.execute(
@@ -99,7 +143,6 @@ class SQLUserProfileRepository(UserProfileRepository):
             )
             db_all_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
 
-        # Insert missing skills once
         for skill_name in all_skill_names:
             norm_name = skill_name.lower()
             if norm_name not in db_all_skills:
@@ -123,7 +166,6 @@ class SQLUserProfileRepository(UserProfileRepository):
             )
             self._session.add(diagnostic_model)
 
-            # Insert DiagnosticSkills for consolidated skills
             for skill in affinity.detected_skills:
                 skill_model = db_all_skills[skill.name.lower()]
                 diag_skill = DiagnosticSkillModel(
@@ -135,7 +177,6 @@ class SQLUserProfileRepository(UserProfileRepository):
                 )
                 self._session.add(diag_skill)
 
-            # Insert DiagnosticSkills for gaps
             for gap in affinity.skill_gaps:
                 skill_model = db_all_skills[gap.skill.name.lower()]
                 diag_skill = DiagnosticSkillModel(
@@ -147,51 +188,6 @@ class SQLUserProfileRepository(UserProfileRepository):
                 )
                 self._session.add(diag_skill)
 
-        # 3. Save Global Profile Skills (profile_skills)
-        # Delete existing profile_skills relations
-        await self._session.execute(
-            delete(ProfileSkillModel).where(
-                ProfileSkillModel.profile_id == profile_model.profile_id
-            )
-        )
-
-        profile_skill_names = [s.name for s in profile.detected_skills]
-        db_profile_skills = {}
-        if profile_skill_names:
-            db_profile_skills_result = await self._session.execute(
-                select(SkillModel).where(SkillModel.name.in_(profile_skill_names))
-            )
-            db_profile_skills = {
-                m.name.lower(): m for m in db_profile_skills_result.scalars().all()
-            }
-
-        for skill in profile.detected_skills:
-            norm_name = skill.name.lower()
-            if norm_name not in db_profile_skills:
-                new_skill_model = SkillModel(
-                    skill_id=uuid4(),
-                    name=skill.name,
-                    nature=skill.nature.value if skill.nature else SkillNature.TECH.value,
-                    weight=skill.weight,
-                    domain_tags=skill.domain_tags or [],
-                    core_domains=skill.core_domains or [],
-                )
-                self._session.add(new_skill_model)
-                db_profile_skills[norm_name] = new_skill_model
-
-            profile_skill_rel = ProfileSkillModel(
-                profile_skill_id=uuid4(),
-                profile_id=profile_model.profile_id,
-                skill_id=db_profile_skills[norm_name].skill_id,
-                self_taught=skill.self_taught,
-                personal_projects=skill.personal_projects,
-                years_of_experience=skill.years_of_experience,
-                has_certification=skill.has_certification,
-                ict_score=skill.calculate_ict(),
-            )
-            self._session.add(profile_skill_rel)
-
-        # Single flush at the end — batches all pending INSERTs
         await self._session.flush()
 
         return profile

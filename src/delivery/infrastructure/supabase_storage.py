@@ -6,7 +6,8 @@ import re
 import time
 import unicodedata
 import uuid
-from typing import ClassVar, cast
+from collections.abc import Callable
+from typing import Any, ClassVar, cast
 from uuid import UUID
 
 import structlog
@@ -42,7 +43,7 @@ class SupabaseStorageService(StorageService):
     def __init__(self, client: Client) -> None:
         self._client = client
 
-    async def _run_sync(self, fn, *args, **kwargs):
+    async def _run_sync(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Run a synchronous Supabase client call in a thread to avoid blocking the event loop."""
         return await asyncio.to_thread(fn, *args, **kwargs)
 
@@ -61,7 +62,9 @@ class SupabaseStorageService(StorageService):
 
         # Ensure the bucket exists
         with contextlib.suppress(Exception):
-            await self._run_sync(self._client.storage.create_bucket, CV_BUCKET, options={"public": False})
+            await self._run_sync(
+                self._client.storage.create_bucket, CV_BUCKET, options={"public": False}
+            )
 
         try:
             await self._run_sync(
