@@ -31,7 +31,9 @@ class NativeLLMClient(LLMService):
             self.api_url = "https://api.openai.com/v1/chat/completions"
             self.api_key = settings.OPENAI_API_KEY
 
-    async def generate(self, prompt: str, context: list[Any] | None = None, max_tokens: int | None = None) -> str:
+    async def generate(
+        self, prompt: str, context: list[Any] | None = None, max_tokens: int | None = None
+    ) -> str:
         """Call the provider API to generate response content with retry on 5xx only."""
         if not self.api_key:
             raise ValueError(f"API key for {self.provider} LLM provider is not set.")
@@ -94,8 +96,7 @@ class NativeLLMClient(LLMService):
                         response_body=body,
                     )
                     raise RateLimitError(
-                        f"Rate limit exceeded for {self.provider}. "
-                        f"Response: {body}"
+                        f"Rate limit exceeded for {self.provider}. Response: {body}"
                     ) from e
 
                 if status >= 500 and attempt == 0:
@@ -115,7 +116,9 @@ class NativeLLMClient(LLMService):
                 )
                 raise
             except Exception as e:
-                logger.error("LLM request failed with unexpected error", error=str(e), exc_info=True)
+                logger.error(
+                    "LLM request failed with unexpected error", error=str(e), exc_info=True
+                )
                 raise
 
         # Only reached if all retries exhausted

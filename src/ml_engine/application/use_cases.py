@@ -103,9 +103,6 @@ Text:
 {text[:3000]}"""
 
 
-
-
-
 class ProfileUserFromCVUseCase:
     """
     Core use case: extract CV, normalize skills, compute Weighted Jaccard affinity vs clusters.
@@ -327,9 +324,7 @@ class ProfileUserFromCVUseCase:
         cv_text_char_limit = 6000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-        raw_output = await self._llm.generate(
-            prompt=prompt, context=[], max_tokens=3000
-        )
+        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=3000)
         parsed = _parse_cv_extraction_output(raw_output)
         if not parsed:
             raise ValueError("Empty extraction data parsed")
@@ -417,13 +412,15 @@ class ProfileUserFromCVUseCase:
             # Use whatever raw data is available from the existing profile
             extracted_data_skills = []
             for s in profile.detected_skills:
-                extracted_data_skills.append({
-                    "name": s.name,
-                    "category": s.nature.value if s.nature else "technical",
-                    "years_of_experience": s.years_of_experience or 0,
-                    "personal_projects": s.personal_projects or False,
-                    "has_certification": s.has_certification or False,
-                })
+                extracted_data_skills.append(
+                    {
+                        "name": s.name,
+                        "category": s.nature.value if s.nature else "technical",
+                        "years_of_experience": s.years_of_experience or 0,
+                        "personal_projects": s.personal_projects or False,
+                        "has_certification": s.has_certification or False,
+                    }
+                )
             raw_skills = extracted_data_skills if extracted_data_skills else []
 
         # Embedding (static zero-vector for backwards compatibility)
@@ -516,9 +513,7 @@ class ProfileUserFromCVUseCase:
                         importance = "high"
                     else:
                         importance = "medium"
-                    skill_gaps.append(
-                        SkillGap(skill=skill, market_importance=importance)
-                    )
+                    skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
             skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
         # Persist enriched profile with is_diagnosed=True
@@ -670,7 +665,10 @@ class ProfileUserFromCVUseCase:
         """
         try:
             result = await self.extract_skills(
-                user_id, cv_id, cv_content, content_type,
+                user_id,
+                cv_id,
+                cv_content,
+                content_type,
             )
 
             # Create profile from extracted data so finalize_diagnosis can run
@@ -696,7 +694,10 @@ class ProfileUserFromCVUseCase:
                             Skill(
                                 name=item["name"],
                                 nature=_nature_from_category(item.get("category", "technical")),
-                                normalized_name=item["name"].lower().replace(" ", "").replace(".", ""),
+                                normalized_name=item["name"]
+                                .lower()
+                                .replace(" ", "")
+                                .replace(".", ""),
                                 self_taught=bool(item.get("self_taught", False)),
                                 personal_projects=bool(item.get("personal_projects", False)),
                                 years_of_experience=int(item.get("years_of_experience", 0) or 0),
@@ -720,7 +721,9 @@ class ProfileUserFromCVUseCase:
                     skill_gaps=[],
                     current_job_role=extracted_data.get("current_job_role") or None,
                     professional_summary=extracted_data.get("professional_summary") or None,
-                    years_experience=int(years_exp) if isinstance(years_exp, (int, float)) else None,
+                    years_experience=int(years_exp)
+                    if isinstance(years_exp, (int, float))
+                    else None,
                     work_experience=extracted_data.get("work_experience") or [],
                     education=extracted_data.get("education") or [],
                     certifications=extracted_data.get("certifications") or [],
@@ -730,7 +733,8 @@ class ProfileUserFromCVUseCase:
                 await self._profiles.save_profile(phase1_profile, persist_diagnostics=False)
 
             return await self.finalize_diagnosis(
-                user_id, cv_id,
+                user_id,
+                cv_id,
             )
         except MLPipelineError:
             raise

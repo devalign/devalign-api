@@ -135,7 +135,9 @@ class SQLAlchemyCVRepository(CVRepository):
         await self._session.flush()
         return int(result.rowcount)  # type: ignore
 
-    async def update_status(self, cv_id: UUID, status: str, error_message: str | None = None) -> int:
+    async def update_status(
+        self, cv_id: UUID, status: str, error_message: str | None = None
+    ) -> int:
         values: dict[str, object] = {"status": status}
         if error_message is not None:
             values["error_message"] = error_message

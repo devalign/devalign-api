@@ -232,9 +232,7 @@ async def run_profile_analysis_task(
                 await session.commit()
                 rows = await cv_repo.update_status(cv_id, "processing")
             if rows == 0:
-                raise RuntimeError(
-                    f"CV {cv_id} not found in database after 3 retries"
-                )
+                raise RuntimeError(f"CV {cv_id} not found in database after 3 retries")
             await session.commit()
 
             use_case = ProfileUserFromCVUseCase(
@@ -256,23 +254,15 @@ async def run_profile_analysis_task(
 
             # Store extracted_data directly (without touching status)
             bg_logger.info("Storing extracted data", cv_id=str(cv_id))
-            rows = await cv_repo.update_extracted_data(
-                cv_id, result["extracted_data"]
-            )
+            rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
             if rows == 0:
-                raise RuntimeError(
-                    f"Failed to update extracted_data for CV {cv_id}"
-                )
+                raise RuntimeError(f"Failed to update extracted_data for CV {cv_id}")
 
             # Mark as skills_detected so the frontend polling picks it up
-            bg_logger.info(
-                "Setting status to skills_detected", cv_id=str(cv_id)
-            )
+            bg_logger.info("Setting status to skills_detected", cv_id=str(cv_id))
             rows = await cv_repo.update_status(cv_id, "skills_detected")
             if rows == 0:
-                raise RuntimeError(
-                    f"Failed to update status to skills_detected for CV {cv_id}"
-                )
+                raise RuntimeError(f"Failed to update status to skills_detected for CV {cv_id}")
             await session.commit()
 
             bg_logger.info(
@@ -297,9 +287,7 @@ async def run_profile_analysis_task(
             try:
                 async with AsyncSessionLocal() as fail_session:
                     cv_repo = SQLAlchemyCVRepository(fail_session)
-                    rows = await cv_repo.update_status(
-                        cv_id, "failed", error_message=error_msg
-                    )
+                    rows = await cv_repo.update_status(cv_id, "failed", error_message=error_msg)
                     if rows > 0:
                         await fail_session.commit()
                         bg_logger.info(
@@ -348,7 +336,6 @@ async def run_profile_analysis_task(
         bg_logger.exception(
             "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
         )
-
 
 
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
@@ -577,7 +564,9 @@ async def finalize_cv_analysis(
 
             if not cv or not cv.extracted_data:
                 bg_logger.error("No extracted data found for CV", cv_id=str(cvid))
-                await cv_repo_bg.update_status(cvid, "failed", error_message="No extracted data found")
+                await cv_repo_bg.update_status(
+                    cvid, "failed", error_message="No extracted data found"
+                )
                 await bg_session.commit()
                 return
 

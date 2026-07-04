@@ -62,7 +62,9 @@ class SupabaseStorageService(StorageService):
 
         # Ensure the bucket exists
         with contextlib.suppress(Exception):
-            await self._run_sync(self._client.storage.create_bucket, CV_BUCKET, options={"public": False})
+            await self._run_sync(
+                self._client.storage.create_bucket, CV_BUCKET, options={"public": False}
+            )
 
         try:
             await self._run_sync(

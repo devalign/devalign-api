@@ -77,7 +77,9 @@ class CVDocumentModel(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    extracted_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=None)
+    extracted_data: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB, nullable=True, default=None
+    )
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )

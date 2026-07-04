@@ -60,7 +60,9 @@ class CVRepository(ABC):
         ...
 
     @abstractmethod
-    async def update_status(self, cv_id: UUID, status: str, error_message: str | None = None) -> int:
+    async def update_status(
+        self, cv_id: UUID, status: str, error_message: str | None = None
+    ) -> int:
         """Update the processing status of a CV document. Returns number of rows affected."""
         ...
 
