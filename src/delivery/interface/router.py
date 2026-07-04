@@ -1,11 +1,17 @@
 """Delivery module API router."""
 
 import asyncio
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 
-from src.delivery.application.dtos import CVListDTO, CVStatusDTO, CVUploadResultDTO
+from src.delivery.application.dtos import (
+    CVListDTO,
+    CVStatusDTO,
+    CVUploadResultDTO,
+    FinalizeRequestDTO,
+    FinalizeResponseDTO,
+)
 from src.delivery.application.use_cases import (
     DeleteCVUseCase,
     GetCurrentUserUseCase,
@@ -16,10 +22,7 @@ from src.delivery.application.use_cases import (
 from src.delivery.infrastructure.repository import SQLAlchemyCVRepository, SQLAlchemyUserRepository
 from src.delivery.infrastructure.supabase_storage import SupabaseStorageService
 from src.dependencies import SessionDep
-from src.ml_engine.domain.entities import ClusterAffinity, SeniorityLevel, UserProfile
-from src.ml_engine.application.dtos import ProfileUpdateDTO
-
-# ML Engine imports for profile unifications
+from src.ml_engine.application.dtos import ProfileUpdateDTO, SkillDTO
 from src.ml_engine.application.dtos import UserProfileDTO as MLUserProfileDTO
 from src.ml_engine.application.use_cases import GetMyProfileUseCase
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
@@ -43,47 +46,6 @@ def _get_list_cvs_use_case(session: SessionDep) -> ListUserCVsUseCase:
         cv_repository=SQLAlchemyCVRepository(session),
         storage_service=SupabaseStorageService(get_supabase_admin_client()),
     )
-
-
-async def _save_processing_profile_draft(
-    session: SessionDep,
-    user_id: UUID,
-    cv_id: UUID,
-) -> None:
-    """Persist a lightweight profile shell so the profile page can render immediately."""
-    profile_repo = SQLUserProfileRepository(session)
-    existing_profile = await profile_repo.get_by_user_id(user_id)
-    if existing_profile:
-        return
-
-    draft_profile = UserProfile(
-        user_id=user_id,
-        cv_id=cv_id,
-        embedding=[],
-        detected_skills=[],
-        seniority=SeniorityLevel.JUNIOR,
-        primary_affinity=ClusterAffinity(
-            cluster_id=uuid4(),
-            cluster_name="Sin Diagnóstico",
-            affinity_score=0.0,
-            is_primary=True,
-        ),
-        secondary_affinities=[],
-        skill_gaps=[],
-        full_name=None,
-        current_job_role=None,
-        years_experience=None,
-        preferred_modality=None,
-        location=None,
-        availability=None,
-        work_experience=[],
-        education=[],
-        certifications=[],
-        cv_raw_text=None,
-    )
-
-    await profile_repo.save(draft_profile)
-    await session.commit()
 
 
 @router.get("", response_model=MLUserProfileDTO, summary="Get current user profile")
@@ -205,9 +167,7 @@ async def upload_cv(
         content_type=file.content_type or "application/octet-stream",
     )
 
-    # If the user does not have a profile yet, persist a minimal draft immediately.
-    # This lets the profile page resolve a non-empty state before the full analysis finishes.
-    await _save_processing_profile_draft(session, UUID(current_user_id), result.cv_id)
+    await session.commit()
 
     # Queue background task to run profile analysis
     background_tasks.add_task(
@@ -227,12 +187,14 @@ async def run_profile_analysis_task(
     content: bytes,
     content_type: str,
 ) -> None:
-    """Run the 2-phase CV analysis pipeline as a FastAPI background task.
+    """Run the CV analysis pipeline as a FastAPI background task.
 
-    Phase 1 callback marks the CV as 'completed' mid-pipeline so the frontend
-    polling detects it quickly (~6–9s). Phase 2 (skill enrichment + diagnosis)
-    continues silently after the callback.
+    Extracts CV text, runs combined LLM extraction, stores extracted data
+    on the CVDocument (not the profile), and marks the CV as
+    ``"skills_detected"`` so the frontend can display skills for user
+    validation before persisting the diagnosis.
     """
+    import asyncio
     import structlog
 
     from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
@@ -245,12 +207,34 @@ async def run_profile_analysis_task(
     from src.shared.database import AsyncSessionLocal
 
     bg_logger = structlog.get_logger("background_tasks")
-    bg_logger.info("Starting 2-phase CV analysis", user_id=str(user_id), cv_id=str(cv_id))
+    bg_logger.info(
+        "Starting CV analysis",
+        user_id=str(user_id),
+        cv_id=str(cv_id),
+    )
 
     try:
         async with AsyncSessionLocal() as session:
             cv_repo = SQLAlchemyCVRepository(session)
-            await cv_repo.update_status(cv_id, "processing")
+
+            # Mark as processing — retry if row not yet visible (race condition)
+            bg_logger.info("Setting status to processing", cv_id=str(cv_id))
+            rows = await cv_repo.update_status(cv_id, "processing")
+            for attempt in range(3):
+                if rows > 0:
+                    break
+                bg_logger.info(
+                    "CV not found yet, retrying...",
+                    cv_id=str(cv_id),
+                    attempt=attempt + 1,
+                )
+                await asyncio.sleep(1)
+                await session.commit()
+                rows = await cv_repo.update_status(cv_id, "processing")
+            if rows == 0:
+                raise RuntimeError(
+                    f"CV {cv_id} not found in database after 3 retries"
+                )
             await session.commit()
 
             use_case = ProfileUserFromCVUseCase(
@@ -261,29 +245,40 @@ async def run_profile_analysis_task(
                 skill_repository=SQLSkillRepository(session),
             )
 
-            async def on_phase1_complete(completed_cv_id: UUID) -> None:
-                """Commit Phase 1 data and mark CV as 'completed' for frontend polling."""
-                await cv_repo.update_status(completed_cv_id, "completed")
-                await session.commit()
-                bg_logger.info(
-                    "Phase 1 committed — CV marked completed, profile visible to user",
-                    user_id=str(user_id),
-                    cv_id=str(completed_cv_id),
-                )
-
-            await use_case.execute(
+            bg_logger.info("Starting LLM extraction", cv_id=str(cv_id))
+            result = await use_case.extract_skills(
                 user_id=user_id,
                 cv_id=cv_id,
                 cv_content=content,
                 content_type=content_type,
-                on_phase1_complete=on_phase1_complete,
             )
-            # Phase 2 has already committed inside the use case via session.
-            # A final commit here ensures any remaining dirty state is flushed.
-            await session.commit()
+            bg_logger.info("LLM extraction completed", cv_id=str(cv_id))
+
+            # Store extracted_data directly (without touching status)
+            bg_logger.info("Storing extracted data", cv_id=str(cv_id))
+            rows = await cv_repo.update_extracted_data(
+                cv_id, result["extracted_data"]
+            )
+            if rows == 0:
+                raise RuntimeError(
+                    f"Failed to update extracted_data for CV {cv_id}"
+                )
+
+            # Mark as skills_detected so the frontend polling picks it up
             bg_logger.info(
-                "Phase 2 complete — full diagnosis persisted",
+                "Setting status to skills_detected", cv_id=str(cv_id)
+            )
+            rows = await cv_repo.update_status(cv_id, "skills_detected")
+            if rows == 0:
+                raise RuntimeError(
+                    f"Failed to update status to skills_detected for CV {cv_id}"
+                )
+            await session.commit()
+
+            bg_logger.info(
+                "Combined extraction complete — waiting for user validation",
                 user_id=str(user_id),
+                cv_id=str(cv_id),
             )
     except Exception as exc:
         is_rate_limit = isinstance(exc, RateLimitError)
@@ -295,16 +290,46 @@ async def run_profile_analysis_task(
             error=str(exc),
             is_rate_limit=is_rate_limit,
         )
-        try:
-            async with AsyncSessionLocal() as fail_session:
-                cv_repo = SQLAlchemyCVRepository(fail_session)
-                await cv_repo.update_status(cv_id, "failed", error_message=error_msg)
-                await fail_session.commit()
-        except Exception as db_exc:
+
+        # Retry setting status to "failed" up to 3 times
+        last_db_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                async with AsyncSessionLocal() as fail_session:
+                    cv_repo = SQLAlchemyCVRepository(fail_session)
+                    rows = await cv_repo.update_status(
+                        cv_id, "failed", error_message=error_msg
+                    )
+                    if rows > 0:
+                        await fail_session.commit()
+                        bg_logger.info(
+                            "CV status set to failed",
+                            cv_id=str(cv_id),
+                            attempt=attempt + 1,
+                        )
+                        last_db_exc = None
+                        break
+                    bg_logger.warning(
+                        "CV not found when setting failed status",
+                        cv_id=str(cv_id),
+                        attempt=attempt + 1,
+                    )
+                    await asyncio.sleep(1)
+            except Exception as db_exc:
+                last_db_exc = db_exc
+                bg_logger.exception(
+                    "Retry setting failed status errored",
+                    cv_id=str(cv_id),
+                    attempt=attempt + 1,
+                )
+                await asyncio.sleep(1)
+
+        if last_db_exc is not None:
             bg_logger.exception(
-                "Failed to update CV status to failed",
+                "All retries exhausted — could not set CV status to failed",
                 user_id=str(user_id),
-                error=str(db_exc),
+                cv_id=str(cv_id),
+                error=str(last_db_exc),
             )
             if attempt < max_retries - 1:
                 await asyncio.sleep(2**attempt)
@@ -359,6 +384,80 @@ async def list_cvs(
     return await use_case.execute(UUID(current_user_id))
 
 
+def _compute_ict(
+    self_taught: bool,
+    personal_projects: bool,
+    years_of_experience: int,
+    has_certification: bool,
+) -> float:
+    exp_points = 3 * years_of_experience
+    cert_points = 4 if has_certification else 0
+    projects_points = 2 if personal_projects else 0
+    self_taught_points = 1 if self_taught else 0
+    return float(min(10.0, self_taught_points + projects_points + exp_points + cert_points))
+
+
+@router.get(
+    "/cvs/{cv_id}/status",
+    response_model=CVStatusDTO,
+    summary="Get a specific CV's processing status",
+)
+async def get_cv_status_by_id(
+    cv_id: UUID,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+) -> CVStatusDTO:
+    """Gets the processing status for a specific CV."""
+    cv_repo = SQLAlchemyCVRepository(session)
+    cv = await cv_repo.get_by_id(cv_id)
+    if not cv or str(cv.user_id) != current_user_id:
+        # CV might still be in-flight from a previous request's transaction.
+        # Return a non-error response so the frontend can keep polling.
+        return CVStatusDTO(cv_id=None, status="not_found")
+
+    error_message = getattr(cv, "error_message", None) or None
+    extracted_skills = None
+    if cv.status == "skills_detected" and cv.extracted_data is not None:
+        raw_skills = cv.extracted_data.get("skills", None)
+        if raw_skills is None:
+            raw_skills = cv.extracted_data.get("technical_skills", None)
+        if raw_skills is None:
+            raw_skills = cv.extracted_data.get("soft_skills", None)
+        if isinstance(raw_skills, list):
+            extracted_skills = []
+            for s in raw_skills:
+                if not isinstance(s, dict) or "name" not in s:
+                    continue
+                years_of_experience = s.get("years_of_experience", 0) or 0
+                self_taught = bool(s.get("self_taught", False))
+                personal_projects = bool(s.get("personal_projects", False))
+                has_certification = bool(s.get("has_certification", False))
+                extracted_skills.append(
+                    SkillDTO(
+                        name=s["name"],
+                        skill_type=s.get("category", "technical"),
+                        years_of_experience=years_of_experience,
+                        self_taught=self_taught,
+                        personal_projects=personal_projects,
+                        has_certification=has_certification,
+                        ict_score=_compute_ict(
+                            self_taught=self_taught,
+                            personal_projects=personal_projects,
+                            years_of_experience=years_of_experience,
+                            has_certification=has_certification,
+                        ),
+                    )
+                )
+
+    return CVStatusDTO(
+        cv_id=cv.id,
+        status=cv.status,
+        uploaded_at=cv.uploaded_at,
+        error_message=error_message,
+        extracted_skills=extracted_skills,
+    )
+
+
 @router.post(
     "/cvs/{cv_id}/reanalyze",
     response_model=CVUploadResultDTO,
@@ -372,6 +471,7 @@ async def reanalyze_cv(
 ) -> CVUploadResultDTO:
     """
     Triggers background re-analysis of a CV that was previously uploaded.
+    Uses the new extract-only flow — the user validates skills before diagnosis.
     """
     cv_repo = SQLAlchemyCVRepository(session)
     cv = await cv_repo.get_by_id(cv_id)
@@ -402,6 +502,197 @@ async def reanalyze_cv(
         size_bytes=cv.size_bytes,
         download_url=url,
         uploaded_at=cv.uploaded_at,
+    )
+
+
+@router.post(
+    "/cv/{cv_id}/finalize",
+    response_model=FinalizeResponseDTO,
+    status_code=202,
+    summary="Finalize CV analysis with validated skills",
+)
+async def finalize_cv_analysis(
+    cv_id: UUID,
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+    background_tasks: BackgroundTasks,
+    data: FinalizeRequestDTO | None = None,
+) -> FinalizeResponseDTO:
+    """
+    Finalize the CV analysis pipeline (Phase 2).
+
+    Called after the user has reviewed and validated their detected skills.
+    Runs the full diagnosis (catalog normalization, affinity computation,
+    gap detection) and persists the complete profile with ``is_diagnosed=True``.
+    """
+    from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
+    from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
+    from src.ml_engine.infrastructure.llm_client import get_llm_service
+    from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
+    from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
+
+    # Verify the CV exists and is in the right state
+    cv_repo = SQLAlchemyCVRepository(session)
+    cv = await cv_repo.get_by_id(cv_id)
+    if not cv or str(cv.user_id) != current_user_id:
+        raise HTTPException(status_code=404, detail="CV not found")
+
+    if cv.status not in ("skills_detected", "processing", "completed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot finalize CV in status '{cv.status}'. Expected 'skills_detected'.",
+        )
+
+    validated_skills = data.skills if data else None
+
+    async def run_finalize_in_background(
+        uid: UUID,
+        cvid: UUID,
+        skills: list | None,
+    ) -> None:
+        """Run Phase 2 diagnosis in a background task.
+
+        Reads extracted_data from CVDocument, builds the UserProfile,
+        saves it, then runs full diagnosis (normalize, affinity, gaps).
+        """
+        import structlog
+        from uuid import uuid4
+
+        from src.ml_engine.domain.entities import (
+            ClusterAffinity,
+            SeniorityLevel,
+            Skill,
+            UserProfile,
+        )
+        from src.ml_engine.application.use_cases import _nature_from_category
+        from src.shared.database import AsyncSessionLocal
+
+        bg_logger = structlog.get_logger("background_tasks")
+
+        async with AsyncSessionLocal() as bg_session:
+            cv_repo_bg = SQLAlchemyCVRepository(bg_session)
+            cv = await cv_repo_bg.get_by_id(cvid)
+
+            if not cv or not cv.extracted_data:
+                bg_logger.error("No extracted data found for CV", cv_id=str(cvid))
+                await cv_repo_bg.update_status(cvid, "failed", error_message="No extracted data found")
+                await bg_session.commit()
+                return
+
+            extracted_data = cv.extracted_data
+            years_exp = extracted_data.get("years_experience")
+
+            if isinstance(years_exp, (int, float)):
+                if years_exp >= 6:
+                    seniority = SeniorityLevel.SENIOR
+                elif years_exp >= 3:
+                    seniority = SeniorityLevel.MID
+                else:
+                    seniority = SeniorityLevel.JUNIOR
+            else:
+                seniority = SeniorityLevel.JUNIOR
+
+            # Use validated skills from frontend, or fall back to extracted ones
+            raw_skills = skills if skills is not None else extracted_data.get("skills", [])
+            raw_skills_list = raw_skills if isinstance(raw_skills, list) else []
+
+            skill_objects = []
+            for item in raw_skills_list:
+                if isinstance(item, dict) and "name" in item:
+                    skill_objects.append(
+                        Skill(
+                            name=item["name"],
+                            nature=_nature_from_category(item.get("category", "technical")),
+                            normalized_name=item["name"].lower().replace(" ", "").replace(".", ""),
+                            self_taught=bool(item.get("self_taught", False)),
+                            personal_projects=bool(item.get("personal_projects", False)),
+                            years_of_experience=int(item.get("years_of_experience", 0) or 0),
+                            has_certification=bool(item.get("has_certification", False)),
+                        )
+                    )
+                elif isinstance(item, dict) and "skill_type" in item:
+                    # Handle SkillDTO format from frontend
+                    skill_objects.append(
+                        Skill(
+                            name=item["name"],
+                            nature=_nature_from_category(item.get("skill_type", "technical")),
+                            normalized_name=item["name"].lower().replace(" ", "").replace(".", ""),
+                            self_taught=bool(item.get("self_taught", False)),
+                            personal_projects=bool(item.get("personal_projects", False)),
+                            years_of_experience=int(item.get("years_of_experience", 0) or 0),
+                            has_certification=bool(item.get("has_certification", False)),
+                        )
+                    )
+
+            profile = UserProfile(
+                user_id=uid,
+                cv_id=cvid,
+                embedding=[],
+                detected_skills=skill_objects,
+                seniority=seniority,
+                primary_affinity=ClusterAffinity(
+                    cluster_id=uuid4(),
+                    cluster_name="Sin Diagnóstico",
+                    affinity_score=0.0,
+                    is_primary=True,
+                ),
+                secondary_affinities=[],
+                skill_gaps=[],
+                current_job_role=extracted_data.get("current_job_role") or None,
+                professional_summary=extracted_data.get("professional_summary") or None,
+                years_experience=int(years_exp) if isinstance(years_exp, (int, float)) else None,
+                work_experience=extracted_data.get("work_experience") or [],
+                education=extracted_data.get("education") or [],
+                certifications=extracted_data.get("certifications") or [],
+                cv_raw_text=extracted_data.get("cv_text", ""),
+                is_diagnosed=False,
+            )
+
+            profile_repo = SQLUserProfileRepository(bg_session)
+            await profile_repo.save(profile)
+
+            use_case = ProfileUserFromCVUseCase(
+                cv_parser=LocalCVParserService(),
+                cluster_repository=SQLClusterRepository(bg_session),
+                profile_repository=profile_repo,
+                llm_service=get_llm_service(),
+                skill_repository=SQLSkillRepository(bg_session),
+            )
+            try:
+                await use_case.finalize_diagnosis(
+                    user_id=uid,
+                    cv_id=cvid,
+                    validated_skills=skills,
+                )
+                await cv_repo_bg.update_status(cvid, "completed")
+                await bg_session.commit()
+                bg_logger.info(
+                    "Phase 2 finalize complete",
+                    user_id=str(uid),
+                    cv_id=str(cvid),
+                )
+            except Exception as exc:
+                bg_logger.exception(
+                    "Phase 2 finalize failed",
+                    user_id=str(uid),
+                    cv_id=str(cvid),
+                    error=str(exc),
+                )
+                await cv_repo_bg.update_status(cvid, "failed", error_message=str(exc))
+                await bg_session.commit()
+
+    background_tasks.add_task(
+        run_finalize_in_background,
+        uid=UUID(current_user_id),
+        cvid=cv_id,
+        skills=validated_skills,
+    )
+
+    return FinalizeResponseDTO(
+        cv_id=cv_id,
+        status="processing",
+        message="Diagnóstico en proceso...",
     )
 
 

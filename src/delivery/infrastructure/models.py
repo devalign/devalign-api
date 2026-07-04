@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.delivery.domain.entities import CVDocument, User
@@ -75,6 +75,7 @@ class CVDocumentModel(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    extracted_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )
@@ -91,6 +92,7 @@ class CVDocumentModel(Base):
             size_bytes=self.size_bytes,
             status=self.status,
             error_message=self.error_message,
+            extracted_data=self.extracted_data,
             uploaded_at=self.uploaded_at,
         )
 
@@ -104,5 +106,6 @@ class CVDocumentModel(Base):
             content_type=cv.content_type,
             size_bytes=cv.size_bytes,
             status=cv.status,
+            extracted_data=cv.extracted_data,
             uploaded_at=cv.uploaded_at,
         )

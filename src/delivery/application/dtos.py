@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, EmailStr
 
+from src.ml_engine.application.dtos import SkillDTO
+
 
 class UserProfileDTO(BaseModel):
     """User profile data returned to API consumers."""
@@ -44,3 +46,18 @@ class CVStatusDTO(BaseModel):
     status: str | None = None
     uploaded_at: datetime | None = None
     error_message: str | None = None
+    extracted_skills: list[SkillDTO] | None = None
+
+
+class FinalizeRequestDTO(BaseModel):
+    """Request body for finalizing CV analysis (Phase 2)."""
+
+    skills: list[SkillDTO] | None = None
+
+
+class FinalizeResponseDTO(BaseModel):
+    """Response after triggering Phase 2 diagnosis."""
+
+    cv_id: UUID
+    status: str = "processing"
+    message: str = "Diagnóstico en proceso..."
