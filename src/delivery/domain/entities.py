@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 
@@ -32,7 +33,7 @@ class CVDocument:
     size_bytes: int
     status: str = "processing"  # processing | skills_detected | completed | failed
     error_message: str | None = None
-    extracted_data: dict | None = None
+    extracted_data: dict[str, Any] | None = None
     uploaded_at: datetime = field(default_factory=datetime.utcnow)
 
     @property

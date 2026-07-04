@@ -1,6 +1,7 @@
 """Delivery module domain ports (interfaces)."""
 
 from abc import ABC, abstractmethod
+from typing import Any
 from uuid import UUID
 
 from src.delivery.domain.entities import CVDocument, User
@@ -54,7 +55,7 @@ class CVRepository(ABC):
         ...
 
     @abstractmethod
-    async def update_extracted_data(self, cv_id: UUID, extracted_data: dict) -> int:
+    async def update_extracted_data(self, cv_id: UUID, extracted_data: dict[str, Any]) -> int:
         """Update the extracted data of a CV document."""
         ...
 

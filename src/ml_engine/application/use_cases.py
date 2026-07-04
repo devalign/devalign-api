@@ -2,7 +2,6 @@
 
 import json
 from collections import deque
-
 from dataclasses import replace as dc_replace
 from typing import Any
 from uuid import UUID, uuid4
@@ -325,8 +324,8 @@ class ProfileUserFromCVUseCase:
         Returns the parsed JSON dict from the LLM.
         """
         logger.info("Running combined LLM extraction")
-        CV_TEXT_CHAR_LIMIT = 6000
-        cv_text_for_llm = cv_text[:CV_TEXT_CHAR_LIMIT]
+        cv_text_char_limit = 6000
+        cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
         raw_output = await self._llm.generate(
             prompt=prompt, context=[], max_tokens=3000
@@ -400,9 +399,7 @@ class ProfileUserFromCVUseCase:
         if not profile:
             raise MLPipelineError("No profile found. Please upload a CV first.")
 
-        cv_text = profile.cv_raw_text or ""
         seniority = profile.seniority
-        years_exp = profile.years_experience
 
         # If validated_skills provided, convert to raw_skills format
         if validated_skills is not None:

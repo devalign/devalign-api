@@ -1,10 +1,12 @@
 """SQLAlchemy ORM models for the delivery module."""
 
 from datetime import datetime
+from typing import Any
 from uuid import UUID, uuid4
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.delivery.domain.entities import CVDocument, User
@@ -75,7 +77,7 @@ class CVDocumentModel(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(50), nullable=False, server_default="processing")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
-    extracted_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    extracted_data: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True, default=None)
     uploaded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=datetime.utcnow
     )

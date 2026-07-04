@@ -1,6 +1,7 @@
 """Delivery module API router."""
 
 import asyncio
+from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
@@ -194,17 +195,16 @@ async def run_profile_analysis_task(
     ``"skills_detected"`` so the frontend can display skills for user
     validation before persisting the diagnosis.
     """
-    import asyncio
     import structlog
 
     from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
-    from src.shared.exceptions import RateLimitError
     from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
     from src.ml_engine.infrastructure.cv_parser import LocalCVParserService
     from src.ml_engine.infrastructure.llm_client import get_llm_service
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
     from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
     from src.shared.database import AsyncSessionLocal
+    from src.shared.exceptions import RateLimitError
 
     bg_logger = structlog.get_logger("background_tasks")
     bg_logger.info(
@@ -331,13 +331,13 @@ async def run_profile_analysis_task(
                 cv_id=str(cv_id),
                 error=str(last_db_exc),
             )
-            if attempt < max_retries - 1:
+            if attempt < 3 - 1:
                 await asyncio.sleep(2**attempt)
 
     bg_logger.exception(
         "Background CV analysis failed after all retries",
         user_id=str(user_id),
-        error=str(last_exception),
+        error=str(last_db_exc),
     )
     try:
         async with AsyncSessionLocal() as fail_session:
@@ -549,23 +549,24 @@ async def finalize_cv_analysis(
     async def run_finalize_in_background(
         uid: UUID,
         cvid: UUID,
-        skills: list | None,
+        skills: list[Any] | None,
     ) -> None:
         """Run Phase 2 diagnosis in a background task.
 
         Reads extracted_data from CVDocument, builds the UserProfile,
         saves it, then runs full diagnosis (normalize, affinity, gaps).
         """
-        import structlog
         from uuid import uuid4
 
+        import structlog
+
+        from src.ml_engine.application.use_cases import _nature_from_category
         from src.ml_engine.domain.entities import (
             ClusterAffinity,
             SeniorityLevel,
             Skill,
             UserProfile,
         )
-        from src.ml_engine.application.use_cases import _nature_from_category
         from src.shared.database import AsyncSessionLocal
 
         bg_logger = structlog.get_logger("background_tasks")
