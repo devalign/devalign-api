@@ -321,20 +321,20 @@ class ProfileUserFromCVUseCase:
 
             # 2. Dynamic inference from core_domains and domain_tags
             # Only infer concepts to avoid over-matching tech skills
-            domains_to_check = set()
+            domains_to_check: set[str] = set()
             if full_skill.core_domains:
                 domains_to_check.update(d.lower() for d in full_skill.core_domains)
             if full_skill.domain_tags:
                 domains_to_check.update(t.lower() for t in full_skill.domain_tags)
-                
+
             for domain_name in domains_to_check:
-                parent_skill = name_to_skill.get(domain_name)
-                if parent_skill and parent_skill.nature == SkillNature.CONCEPT:
-                    parent_id = parent_skill.id
-                    if parent_id:
-                        if parent_id not in inferred_skills:
+                domain_parent_skill = name_to_skill.get(domain_name)
+                if domain_parent_skill and domain_parent_skill.nature == SkillNature.CONCEPT:
+                    domain_parent_id = domain_parent_skill.id
+                    if domain_parent_id:
+                        if domain_parent_id not in inferred_skills:
                             stamped_parent = dc_replace(
-                                parent_skill,
+                                domain_parent_skill,
                                 inferred_from=[current_skill.name],
                                 self_taught=current_skill.self_taught,
                                 personal_projects=current_skill.personal_projects,
@@ -342,15 +342,15 @@ class ProfileUserFromCVUseCase:
                                 has_certification=current_skill.has_certification,
                                 ict_score=current_skill.ict_score,
                             )
-                            inferred_skills[parent_id] = stamped_parent
+                            inferred_skills[domain_parent_id] = stamped_parent
                             to_process.append(stamped_parent)
                             logger.debug(
                                 "Inferred concept from core_domains/domain_tags",
                                 child=current_skill.name,
-                                parent=parent_skill.name,
+                                parent=domain_parent_skill.name,
                             )
                         else:
-                            existing = inferred_skills[parent_id]
+                            existing = inferred_skills[domain_parent_id]
                             if current_skill.ict_score > existing.ict_score:
                                 stamped_parent = dc_replace(
                                     existing,
@@ -361,13 +361,14 @@ class ProfileUserFromCVUseCase:
                                     personal_projects=existing.personal_projects
                                     or current_skill.personal_projects,
                                     years_of_experience=max(
-                                        existing.years_of_experience, current_skill.years_of_experience
+                                        existing.years_of_experience,
+                                        current_skill.years_of_experience,
                                     ),
                                     has_certification=existing.has_certification
                                     or current_skill.has_certification,
                                     ict_score=max(existing.ict_score, current_skill.ict_score),
                                 )
-                                inferred_skills[parent_id] = stamped_parent
+                                inferred_skills[domain_parent_id] = stamped_parent
 
         return list(inferred_skills.values())
 

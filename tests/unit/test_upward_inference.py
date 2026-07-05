@@ -260,4 +260,3 @@ async def test_infers_concept_from_core_domains_and_tags() -> None:
 
     backend_skill = next(s for s in result if s.name == "Backend")
     assert "Java" in backend_skill.inferred_from
-

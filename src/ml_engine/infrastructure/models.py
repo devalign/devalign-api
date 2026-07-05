@@ -92,7 +92,10 @@ class SkillStandardModel(Base):
 
     id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     skill_id: Mapped[UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("skills.skill_id", ondelete="CASCADE"), nullable=False, index=True
+        PG_UUID(as_uuid=True),
+        ForeignKey("skills.skill_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     standard_name: Mapped[str] = mapped_column(String(50), nullable=False)
     standard_uri: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)

@@ -6,9 +6,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.ml_engine.domain.entities import Skill, SkillNature, SkillRelation, SkillRelationType, SkillStandard
+from src.ml_engine.domain.entities import (
+    Skill,
+    SkillNature,
+    SkillRelation,
+    SkillRelationType,
+    SkillStandard,
+)
 from src.ml_engine.domain.ports import SkillRepository
-from src.ml_engine.infrastructure.models import SkillAliasModel, SkillModel, SkillRelationModel, SkillStandardModel
+from src.ml_engine.infrastructure.models import (
+    SkillAliasModel,
+    SkillModel,
+    SkillRelationModel,
+)
 
 
 def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> Skill:
