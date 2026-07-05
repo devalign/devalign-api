@@ -254,6 +254,14 @@ class ProfileUserFromCVUseCase:
         elif skill_graph is None:
             skill_graph = await self._skills.get_skill_graph()
 
+        # build name_to_skill map for concept/domain mapping
+        name_to_skill: dict[str, Skill] = {}
+        for s in skill_graph.values():
+            if s.name:
+                name_to_skill[s.name.lower()] = s
+            if s.normalized_name:
+                name_to_skill[s.normalized_name.lower()] = s
+
         # Start with the explicitly detected skills, keyed by ID for O(1) dedup
         inferred_skills: dict[UUID, Skill] = {s.id: s for s in skills if s.id}
         to_process: deque[Skill] = deque(s for s in skills if s.id)
@@ -266,6 +274,7 @@ class ProfileUserFromCVUseCase:
             if not full_skill:
                 continue
 
+            # 1. Standard upward relation inference
             for relation in full_skill.relations:
                 if relation.relation_type not in _upward_types:
                     continue
@@ -309,6 +318,56 @@ class ProfileUserFromCVUseCase:
                                 ict_score=max(existing.ict_score, current_skill.ict_score),
                             )
                             inferred_skills[parent_id] = stamped_parent
+
+            # 2. Dynamic inference from core_domains and domain_tags
+            # Only infer concepts to avoid over-matching tech skills
+            domains_to_check = set()
+            if full_skill.core_domains:
+                domains_to_check.update(d.lower() for d in full_skill.core_domains)
+            if full_skill.domain_tags:
+                domains_to_check.update(t.lower() for t in full_skill.domain_tags)
+                
+            for domain_name in domains_to_check:
+                parent_skill = name_to_skill.get(domain_name)
+                if parent_skill and parent_skill.nature == SkillNature.CONCEPT:
+                    parent_id = parent_skill.id
+                    if parent_id:
+                        if parent_id not in inferred_skills:
+                            stamped_parent = dc_replace(
+                                parent_skill,
+                                inferred_from=[current_skill.name],
+                                self_taught=current_skill.self_taught,
+                                personal_projects=current_skill.personal_projects,
+                                years_of_experience=current_skill.years_of_experience,
+                                has_certification=current_skill.has_certification,
+                                ict_score=current_skill.ict_score,
+                            )
+                            inferred_skills[parent_id] = stamped_parent
+                            to_process.append(stamped_parent)
+                            logger.debug(
+                                "Inferred concept from core_domains/domain_tags",
+                                child=current_skill.name,
+                                parent=parent_skill.name,
+                            )
+                        else:
+                            existing = inferred_skills[parent_id]
+                            if current_skill.ict_score > existing.ict_score:
+                                stamped_parent = dc_replace(
+                                    existing,
+                                    inferred_from=list(
+                                        set([*existing.inferred_from, current_skill.name])
+                                    ),
+                                    self_taught=existing.self_taught or current_skill.self_taught,
+                                    personal_projects=existing.personal_projects
+                                    or current_skill.personal_projects,
+                                    years_of_experience=max(
+                                        existing.years_of_experience, current_skill.years_of_experience
+                                    ),
+                                    has_certification=existing.has_certification
+                                    or current_skill.has_certification,
+                                    ict_score=max(existing.ict_score, current_skill.ict_score),
+                                )
+                                inferred_skills[parent_id] = stamped_parent
 
         return list(inferred_skills.values())
 
