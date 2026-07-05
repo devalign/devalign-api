@@ -21,8 +21,6 @@ from src.shared.database import AsyncSessionLocal
 def get_nature_from_category(category: str) -> str:
     if category in ("hard_skill", "tool"):
         return "tech"
-    elif category == "soft_skill":
-        return "soft"
     elif category == "methodology":
         return "concept"
     return "tech"
@@ -54,8 +52,6 @@ async def seed() -> None:
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.70, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
                 {"name": "Kubernetes", "category": "tool", "weight": 2.0, "frequency": 0.55, "domain_tags": ["devops", "cloud", "kubernetes", "orchestration"], "core_domains": ["DevOps", "Cloud"]},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.90, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
-                {"name": "Liderazgo", "category": "soft_skill", "weight": 1.0, "frequency": 0.85, "domain_tags": ["leadership"], "core_domains": []},
-                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.80, "domain_tags": ["communication"], "core_domains": []},
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.82, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
@@ -73,8 +69,6 @@ async def seed() -> None:
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.75, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
                 {"name": "Redis", "category": "hard_skill", "weight": 1.5, "frequency": 0.55, "domain_tags": ["database", "cache", "redis"], "core_domains": ["Backend"]},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
-                {"name": "Trabajo en equipo", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["teamwork"], "core_domains": []},
-                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.90, "domain_tags": ["problem-solving"], "core_domains": []},
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
@@ -91,8 +85,6 @@ async def seed() -> None:
                 {"name": "CSS3", "category": "hard_skill", "weight": 2.0, "frequency": 0.90, "domain_tags": ["css", "frontend", "web"], "core_domains": ["Frontend"]},
                 {"name": "Tailwind CSS", "category": "tool", "weight": 1.5, "frequency": 0.82, "domain_tags": ["tailwindcss", "css", "frontend", "design"], "core_domains": ["Frontend"]},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.92, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
-                {"name": "Adaptabilidad", "category": "soft_skill", "weight": 1.0, "frequency": 0.85, "domain_tags": ["adaptability"], "core_domains": []},
-                {"name": "Comunicación", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["communication"], "core_domains": []},
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.85, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },
@@ -110,7 +102,6 @@ async def seed() -> None:
                 {"name": "Prometheus", "category": "tool", "weight": 2.0, "frequency": 0.65, "domain_tags": ["prometheus", "monitoring", "devops"], "core_domains": ["DevOps"]},
                 {"name": "Grafana", "category": "tool", "weight": 2.0, "frequency": 0.68, "domain_tags": ["grafana", "monitoring", "visualization", "devops"], "core_domains": ["DevOps"]},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.95, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
-                {"name": "Resolución de problemas", "category": "soft_skill", "weight": 1.0, "frequency": 0.92, "domain_tags": ["problem-solving"], "core_domains": []},
                 {"name": "Agile", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["agile", "methodology"], "core_domains": []},
             ],
         },
@@ -128,7 +119,6 @@ async def seed() -> None:
                 {"name": "Snowflake", "category": "tool", "weight": 2.5, "frequency": 0.65, "domain_tags": ["snowflake", "cloud", "data-warehouse"], "core_domains": ["Data", "Cloud"]},
                 {"name": "Docker", "category": "tool", "weight": 2.0, "frequency": 0.60, "domain_tags": ["containers", "docker", "devops"], "core_domains": ["DevOps"]},
                 {"name": "Git", "category": "tool", "weight": 1.0, "frequency": 0.85, "domain_tags": ["git", "vcs"], "core_domains": ["DevOps"]},
-                {"name": "Pensamiento crítico", "category": "soft_skill", "weight": 1.0, "frequency": 0.88, "domain_tags": ["critical-thinking"], "core_domains": []},
                 {"name": "Scrum", "category": "methodology", "weight": 1.0, "frequency": 0.80, "domain_tags": ["scrum", "agile", "methodology"], "core_domains": []},
             ],
         },

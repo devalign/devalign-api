@@ -70,7 +70,7 @@ async def update_my_skills(
             except ValueError:
                 st_lower = s.skill_type.lower()
                 if "soft" in st_lower:
-                    nature_val = SkillNature.SOFT
+                    nature_val = SkillNature.TECH
                 elif "concept" in st_lower:
                     nature_val = SkillNature.CONCEPT
 

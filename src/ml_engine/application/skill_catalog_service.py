@@ -103,7 +103,7 @@ You are an expert IT Skill Classifier.
 Analyze the following list of raw skills and normalize them into a Knowledge Graph format.
 For each skill, provide:
 - canonical_name: The standard, capitalized name of the technology/concept (e.g., "React", "PostgreSQL", "Microservices").
-- nature: Must be exactly one of: "concept", "tech", "soft".
+- nature: Must be exactly one of: "concept", "tech".
 - domain_tags: A list of specific, customized tags representing detailed sub-domains or categories (e.g., ["web", "frontend", "spa"], ["database", "relational"], ["microservices", "api"], ["cloud", "serverless"]).
 - core_domains: A list of general core domains. MUST be selected strictly from: ["Backend", "Frontend", "Mobile", "QA", "DevOps", "Cloud", "Data"]. If a skill doesn't fit any, return an empty list.
 - aliases: A list of common alternate spellings or raw inputs that should map to this (including the raw input provided).

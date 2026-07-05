@@ -40,10 +40,6 @@ class SkillModel(Base):
     skill_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Normalized skill name — lowercase, canonical form (e.g. "react.js", "kubernetes")
     name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
-    # ESCO identifier URI (nullable for custom skills, unique)
-    esco_uri: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, unique=True, index=True
-    )
     # "concept" | "tech" | "soft"
     nature: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")
@@ -55,6 +51,9 @@ class SkillModel(Base):
     )
 
     # Relationships
+    standards: Mapped[list[SkillStandardModel]] = relationship(
+        "SkillStandardModel", back_populates="skill", lazy="select", cascade="all, delete-orphan"
+    )
     cluster_skills: Mapped[list[ClusterSkillModel]] = relationship(
         "ClusterSkillModel", back_populates="skill", lazy="select"
     )
@@ -81,6 +80,26 @@ class SkillModel(Base):
         lazy="select",
         cascade="all, delete-orphan",
     )
+
+
+class SkillStandardModel(Base):
+    """ORM model for the skill_standards table.
+
+    Maps internal CONCEPT skills to external international standards (e.g. ESCO, O*NET).
+    """
+
+    __tablename__ = "skill_standards"
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    skill_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("skills.skill_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    standard_name: Mapped[str] = mapped_column(String(50), nullable=False)
+    standard_uri: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)
+    standard_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Relationships
+    skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="standards")
 
 
 class SkillAliasModel(Base):

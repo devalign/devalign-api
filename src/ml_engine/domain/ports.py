@@ -102,10 +102,7 @@ class SkillRepository(ABC):
         """Retrieve all canonical skills with aliases and outgoing relations."""
         ...
 
-    @abstractmethod
-    async def get_non_esco_skills(self) -> list[Skill]:
-        """Retrieve all canonical skills that do not have an ESCO URI."""
-        ...
+
 
     @abstractmethod
     async def get_skill_graph(self) -> dict[UUID, Skill]:

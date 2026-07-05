@@ -871,11 +871,11 @@ If the text IS a CV, extract ALL of the following details in a structured JSON f
 1. Current Job Role (current_job_role): the person's most recent job title
 2. Professional Summary (professional_summary): a 1-2 sentence summary of the candidate's profile
 3. Years of experience (years_experience): total years of professional experience (integer or null)
-4. Skills (skills): an exhaustive array of skill objects. Extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, architecture, and soft skill mentioned in the CV. Do NOT summarize, group, or omit any. The list should be exhaustive (typically 20-50 items for a technical profile).
+4. Skills (skills): an exhaustive array of skill objects. Extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, and engineering concept mentioned in the CV. Do NOT extract soft skills (e.g., leadership, communication, teamwork, time management). Focus strictly on technical skills and tools. The list should be exhaustive (typically 20-50 items for a technical profile).
 
 For each skill, extract:
 - name: the skill name exactly as it appears
-- category: one of "technical", "soft", "tools", or "methodologies"
+- category: one of "technical", "tools", or "methodologies"
 - years_of_experience: integer, estimated years the candidate has used this skill based on work experience dates
 - self_taught: boolean, true only if the CV explicitly states this skill was self-taught
 - personal_projects: boolean, true if the CV mentions using this skill in personal or open-source projects
@@ -914,7 +914,7 @@ If it IS a CV, use this schema:
   "skills": [
     {{
       "name": "string",
-      "category": "technical | soft | tools | methodologies",
+      "category": "technical | tools | methodologies",
       "years_of_experience": integer,
       "self_taught": boolean,
       "personal_projects": boolean,
@@ -972,8 +972,6 @@ def _nature_from_category(category: str) -> SkillNature:
     cat_lower = category.lower().strip()
     if cat_lower in ("technical", "tech"):
         return SkillNature.TECH
-    if cat_lower in ("soft", "soft_skill"):
-        return SkillNature.SOFT
     if cat_lower in ("concept", "methodology", "methodologies"):
         return SkillNature.CONCEPT
     if cat_lower in ("tools", "tool"):
@@ -1476,11 +1474,11 @@ class GetKnowledgeGraphUseCase:
             gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
             neutral = {}
 
-        # Fetch all non-ESCO skills to render as the general market backdrop
-        non_esco_skills = await self._skills.get_non_esco_skills()
+        # Fetch all skills to render as the general market backdrop
+        all_market_skills = await self._skills.get_all_skills()
         market = {
             s.normalized_name: s
-            for s in non_esco_skills
+            for s in all_market_skills
             if s.normalized_name not in acquired
             and s.normalized_name not in gaps
             and s.normalized_name not in neutral

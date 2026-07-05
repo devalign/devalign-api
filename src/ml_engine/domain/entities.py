@@ -25,7 +25,6 @@ class SkillNature(StrEnum):
 
     CONCEPT = "concept"
     TECH = "tech"
-    SOFT = "soft"
 
 
 class SkillRelationType(StrEnum):
@@ -48,8 +47,17 @@ class SkillRelation:
 
 
 @dataclass(frozen=True)
+class SkillStandard:
+    """An external validation standard (e.g. ESCO, O*NET) for a skill."""
+
+    standard_name: str
+    standard_uri: str
+    standard_code: str | None = None
+
+
+@dataclass(frozen=True)
 class Skill:
-    """A technical or soft skill extracted from job offers or CVs."""
+    """A technical skill extracted from job offers or CVs."""
 
     name: str
     nature: SkillNature
@@ -58,6 +66,7 @@ class Skill:
     core_domains: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
     relations: list[SkillRelation] = field(default_factory=list)
+    standards: list[SkillStandard] = field(default_factory=list)
     weight: float = 1.0
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     embedding: list[float] | None = None
