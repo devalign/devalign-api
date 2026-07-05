@@ -227,3 +227,36 @@ async def test_skill_not_in_graph_is_skipped_gracefully() -> None:
 
     # Unknown skill has no id so it cannot be traversed — just returned as-is
     assert len(result) == 0  # Skipped because id is None
+
+
+def _concept(name: str, normalized: str) -> Skill:
+    return Skill(
+        id=uuid4(),
+        name=name,
+        nature=SkillNature.CONCEPT,
+        normalized_name=normalized,
+        relations=[],
+    )
+
+
+@pytest.mark.asyncio
+async def test_infers_concept_from_core_domains_and_tags() -> None:
+    """Java has core_domains=["Backend"], Backend is a concept. Backend must be inferred."""
+    backend = _concept("Backend", "backend")
+    java = Skill(
+        id=uuid4(),
+        name="Java",
+        nature=SkillNature.TECH,
+        normalized_name="java",
+        core_domains=["Backend"],
+        domain_tags=["Server-side"],
+    )
+
+    use_case = _make_use_case([backend, java])
+    result = await use_case._expand_with_upward_inference([java])
+
+    names = {s.name for s in result}
+    assert "Backend" in names
+
+    backend_skill = next(s for s in result if s.name == "Backend")
+    assert "Java" in backend_skill.inferred_from

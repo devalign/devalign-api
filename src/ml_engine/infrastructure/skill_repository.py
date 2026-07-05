@@ -6,9 +6,19 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from src.ml_engine.domain.entities import Skill, SkillNature, SkillRelation, SkillRelationType
+from src.ml_engine.domain.entities import (
+    Skill,
+    SkillNature,
+    SkillRelation,
+    SkillRelationType,
+    SkillStandard,
+)
 from src.ml_engine.domain.ports import SkillRepository
-from src.ml_engine.infrastructure.models import SkillAliasModel, SkillModel, SkillRelationModel
+from src.ml_engine.infrastructure.models import (
+    SkillAliasModel,
+    SkillModel,
+    SkillRelationModel,
+)
 
 
 def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> Skill:
@@ -31,6 +41,14 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         )
         for r in m.outgoing_relations
     ]
+    standards = [
+        SkillStandard(
+            standard_name=s.standard_name,
+            standard_uri=s.standard_uri,
+            standard_code=s.standard_code,
+        )
+        for s in m.standards
+    ]
     return Skill(
         id=m.skill_id,
         name=m.name,
@@ -40,6 +58,7 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         core_domains=m.core_domains if m.core_domains else [],
         aliases=aliases,
         relations=relations,
+        standards=standards,
         weight=float(m.weight),
         embedding=m.embedding,
     )
@@ -52,9 +71,9 @@ class SQLSkillRepository(SkillRepository):
         self._session = session
 
     async def get_all_skills(self) -> list[Skill]:
-        """Retrieve all canonical skills with their aliases and outgoing relations.
+        """Retrieve all canonical skills with their aliases, outgoing relations, and standards.
 
-        Uses a single query with eagerly loaded aliases and relations to avoid
+        Uses a single query with eagerly loaded aliases, relations, and standards to avoid
         N+1 query problems. Target skill names in relations are resolved via
         an in-memory name map built from the same query results.
 
@@ -65,24 +84,11 @@ class SQLSkillRepository(SkillRepository):
             select(SkillModel).options(
                 selectinload(SkillModel.aliases),
                 selectinload(SkillModel.outgoing_relations),
+                selectinload(SkillModel.standards),
             )
         )
         models = result.scalars().all()
         # Build a name map to resolve target_skill_name without extra queries
-        name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
-        return [_model_to_skill(m, name_map) for m in models]
-
-    async def get_non_esco_skills(self) -> list[Skill]:
-        """Retrieve all canonical skills that do not have an ESCO URI."""
-        result = await self._session.execute(
-            select(SkillModel)
-            .where(SkillModel.esco_uri.is_(None))
-            .options(
-                selectinload(SkillModel.aliases),
-                selectinload(SkillModel.outgoing_relations),
-            )
-        )
-        models = result.scalars().all()
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
         return [_model_to_skill(m, name_map) for m in models]
 
