@@ -1,4 +1,4 @@
-"""Seed script: Parse ESCO digital skills (S5 Working with computers) in Spanish and English and seed the database.
+"""Seed script: Parse ESCO IT skills based on IT Occupations (ISCO 25 & 35) in Spanish and English and seed the database.
 
 Usage:
     python scripts/seed_standards.py
@@ -28,64 +28,63 @@ ES_CSV_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - e
 EN_CSV_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - en - csv", "skills_en.csv")
 HIERARCHY_ES_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - es - csv", "skillsHierarchy_es.csv")
 BROADER_ES_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - es - csv", "broaderRelationsSkillPillar_es.csv")
+OCCUPATIONS_CSV_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - es - csv", "occupations_es.csv")
+RELATIONS_CSV_PATH = os.path.join(BASE_DIR, "ESCO dataset - v1.2.1 - classification - es - csv", "occupationSkillRelations_es.csv")
 
 
 async def seed_standards():
-    logger.info("Starting ESCO digital skills (S5 Working with computers) seeding...")
+    logger.info("Starting ESCO IT skills seeding based on TI Occupations...")
 
     # 1. Verify files exist
-    paths = [ES_CSV_PATH, EN_CSV_PATH, HIERARCHY_ES_PATH, BROADER_ES_PATH]
+    paths = [ES_CSV_PATH, EN_CSV_PATH, HIERARCHY_ES_PATH, BROADER_ES_PATH, OCCUPATIONS_CSV_PATH, RELATIONS_CSV_PATH]
     for p in paths:
         if not os.path.exists(p):
             logger.error(f"Required CSV file not found: {p}. Ensure ESCO datasets are extracted in C:\\Projects\\Devalign")
             return
 
-    # 2. Parse hierarchy to find all S5 groups
-    logger.info("Parsing ESCO hierarchies to locate S5 groups...")
+    # 2. Filter ESCO occupations for IT roles (ISCO 25 & 35)
+    logger.info("Filtering ESCO occupations for IT roles (ISCO 25 and 35)...")
+    df_occ = pd.read_csv(OCCUPATIONS_CSV_PATH)
+    df_occ['iscoGroup_str'] = df_occ['iscoGroup'].astype(str)
+    it_occs = df_occ[df_occ['iscoGroup_str'].str.startswith(('25', '35'))]['conceptUri'].unique()
+    it_occs_set = set(it_occs)
+    logger.info(f"Found {len(it_occs_set)} IT occupations.")
+
+    # 3. Filter ESCO skill relations for IT occupations
+    logger.info("Filtering ESCO skill relations for IT occupations...")
+    df_rel = pd.read_csv(RELATIONS_CSV_PATH)
+    it_skills_uris = df_rel[df_rel['occupationUri'].isin(it_occs_set)]['skillUri'].unique()
+    it_skills_set = set(it_skills_uris)
+    logger.info(f"Found {len(it_skills_set)} unique skills mapped to IT occupations.")
+
+    # 4. Parse hierarchy to resolve group codes
+    logger.info("Parsing ESCO hierarchies to resolve group codes...")
     df_hier = pd.read_csv(HIERARCHY_ES_PATH)
-    
-    # Filter rows where any level code starts with 'S5'
-    s5_rows = df_hier[
-        df_hier['Level 0 code'].astype(str).str.startswith('S5') |
-        df_hier['Level 1 code'].astype(str).str.startswith('S5') |
-        df_hier['Level 2 code'].astype(str).str.startswith('S5') |
-        df_hier['Level 3 code'].astype(str).str.startswith('S5')
-    ]
-    
-    # Collect group URIs and map them to their standard code (e.g. S5.1.0)
-    s5_groups = {}  # URI -> code
-    for _, row in s5_rows.iterrows():
+    all_groups = {}  # URI -> code
+    for _, row in df_hier.iterrows():
         for level in range(4):
             uri_col = f"Level {level} URI"
             code_col = f"Level {level} code"
             if uri_col in df_hier.columns and code_col in df_hier.columns:
                 uri = row[uri_col]
                 code = row[code_col]
-                if pd.notna(uri) and pd.notna(code) and str(code).startswith('S5'):
-                    s5_groups[uri] = str(code)
+                if pd.notna(uri) and pd.notna(code):
+                    all_groups[uri] = str(code)
 
-    logger.info(f"Found {len(s5_groups)} groups under S5 hierarchy.")
-
-    # 3. Parse broader relations to map leaf skills to their S5 parents
-    logger.info("Parsing broader relations to resolve S5 leaf skills...")
+    # 5. Parse broader relations to map leaf skills to parent groups
+    logger.info("Parsing broader relations to map leaf skills to parent groups...")
     df_broad = pd.read_csv(BROADER_ES_PATH)
-    s5_leaf_skills = {}  # conceptUri -> parent_code
+    leaf_skills = {}  # conceptUri -> parent_code
     for _, row in df_broad.iterrows():
         source_uri = row["conceptUri"]
         target_uri = row["broaderUri"]
-        if target_uri in s5_groups:
-            s5_leaf_skills[source_uri] = s5_groups[target_uri]
+        if target_uri in all_groups:
+            leaf_skills[source_uri] = all_groups[target_uri]
 
-    logger.info(f"Found {len(s5_leaf_skills)} leaf skills belonging to S5.")
-
-    # Union all S5 URIs to be seeded
-    s5_uris_to_seed = set(s5_groups.keys()) | set(s5_leaf_skills.keys())
-    logger.info(f"Total S5 concepts to seed: {len(s5_uris_to_seed)}")
-
-    # 4. Load full Spanish and English skill details
+    # 6. Load full Spanish and English skill details, dropping duplicates
     logger.info("Reading skill details (ES & EN)...")
-    df_es = pd.read_csv(ES_CSV_PATH).dropna(subset=["conceptUri", "preferredLabel"])
-    df_en = pd.read_csv(EN_CSV_PATH).dropna(subset=["conceptUri", "preferredLabel"])
+    df_es = pd.read_csv(ES_CSV_PATH).dropna(subset=["conceptUri", "preferredLabel"]).drop_duplicates(subset=["conceptUri"])
+    df_en = pd.read_csv(EN_CSV_PATH).dropna(subset=["conceptUri", "preferredLabel"]).drop_duplicates(subset=["conceptUri"])
 
     merged_df = pd.merge(
         df_es[["conceptUri", "preferredLabel", "altLabels", "description", "skillType"]],
@@ -94,11 +93,11 @@ async def seed_standards():
         suffixes=("_es", "_en")
     )
     
-    # Filter to only keep S5 digital skills
-    s5_details = merged_df[merged_df["conceptUri"].isin(s5_uris_to_seed)]
-    logger.info(f"Loaded details for {len(s5_details)} aligned S5 digital skills.")
+    # Filter to only keep skills mapped to IT occupations
+    it_details = merged_df[merged_df["conceptUri"].isin(it_skills_set)]
+    logger.info(f"Loaded details for {len(it_details)} aligned IT skills.")
 
-    # 5. Initialize Voyage Embedding Service if configured
+    # 7. Initialize Voyage Embedding Service if configured
     embedding_service = None
     if settings.VOYAGE_API_KEY:
         logger.info("Initializing Voyage Embedding Service...")
@@ -110,7 +109,32 @@ async def seed_standards():
         logger.warning("VOYAGE_API_KEY not configured. Embeddings will not be generated.")
 
     async with AsyncSessionLocal() as session:
-        # Load existing skills and standards to avoid duplicates
+        # A. Clean up old ESCO skills first
+        logger.info("Cleaning up existing ESCO standard mappings and skills...")
+        existing_esco_standards = await session.execute(
+            select(SkillStandardModel.skill_id, SkillStandardModel.id).where(SkillStandardModel.standard_name == "ESCO")
+        )
+        esco_mappings = existing_esco_standards.all()
+        if esco_mappings:
+            esco_skill_ids = [m[0] for m in esco_mappings]
+            esco_standard_ids = [m[1] for m in esco_mappings]
+            
+            # Delete standard mappings
+            for sid in esco_standard_ids:
+                standard_obj = await session.get(SkillStandardModel, sid)
+                if standard_obj:
+                    await session.delete(standard_obj)
+            
+            # Delete skills (which cascades to aliases and relations)
+            for skid in esco_skill_ids:
+                skill_obj = await session.get(SkillModel, skid)
+                if skill_obj:
+                    await session.delete(skill_obj)
+            
+            await session.commit()
+            logger.info(f"Cleaned up {len(esco_skill_ids)} old ESCO skills and their mappings.")
+
+        # Load remaining skills and standards to avoid duplicates
         logger.info("Querying existing database state...")
         existing_skills_query = await session.execute(select(SkillModel))
         existing_skills = existing_skills_query.scalars().all()
@@ -125,14 +149,15 @@ async def seed_standards():
         standards_to_insert = []
         aliases_to_insert = []
         skills_to_update_standard = []
+        seen_names_to_insert = {}  # name_es -> skill_id
 
-        for _, row in s5_details.iterrows():
+        for _, row in it_details.iterrows():
             uri = row["conceptUri"]
             name_es = row["preferredLabel_es"].strip().lower()
             name_en = row["preferredLabel_en"].strip().lower()
             
             # Resolve the standard code
-            code = s5_groups.get(uri) or s5_leaf_skills.get(uri)
+            code = all_groups.get(uri) or leaf_skills.get(uri) or "IT"
 
             # If standard already exists, skip
             if uri in existing_standards:
@@ -152,21 +177,36 @@ async def seed_standards():
                     )
                 )
                 skills_to_update_standard.append((existing_skill, name_es, name_en, row["altLabels_es"], row["altLabels_en"]))
+            elif name_es in seen_names_to_insert:
+                # Skill name is duplicate, map standard URI to already planned new skill
+                planned_skill_id = seen_names_to_insert[name_es]
+                standards_to_insert.append(
+                    SkillStandardModel(
+                        id=uuid4(),
+                        skill_id=planned_skill_id,
+                        standard_name="ESCO",
+                        standard_uri=uri,
+                        standard_code=code
+                    )
+                )
             else:
                 # Create a new skill completely
+                skill_id = uuid4()
                 skill = SkillModel(
-                    skill_id=uuid4(),
+                    skill_id=skill_id,
                     name=name_es,
                     nature="concept",
                     weight=1.00
                 )
                 new_skills_to_insert.append((skill, uri, code, name_es, name_en, row["altLabels_es"], row["altLabels_en"]))
+                seen_names_to_insert[name_es] = skill_id
 
-        # A. Process Existing Skills linking to ESCO
+        # B. Process Existing Skills linking to ESCO
         if standards_to_insert:
-            logger.info(f"Adding ESCO standards to {len(standards_to_insert)} existing skills...")
+            logger.info(f"Adding ESCO standards to {len(standards_to_insert)} existing or duplicate-name skills...")
             session.add_all(standards_to_insert)
-            for skill, name_es, name_en, alts_es, alts_en in skills_to_update_standard:
+            for skill_info in skills_to_update_standard:
+                skill, name_es, name_en, alts_es, alts_en = skill_info
                 # Add aliases
                 if name_es != name_en:
                     aliases_to_insert.append(SkillAliasModel(alias_name=name_en, skill_id=skill.skill_id))
@@ -182,10 +222,10 @@ async def seed_standards():
                             aliases_to_insert.append(SkillAliasModel(alias_name=alt_clean, skill_id=skill.skill_id))
             await session.commit()
 
-        # B. Process New Skill Inserts in batches (and generate embeddings if possible)
+        # C. Process New Skill Inserts in batches (and generate embeddings if possible)
         batch_size = 50
         total_seeded = 0
-        logger.info(f"Inserting {len(new_skills_to_insert)} new S5 digital skills...")
+        logger.info(f"Inserting {len(new_skills_to_insert)} new IT skills...")
 
         for i in range(0, len(new_skills_to_insert), batch_size):
             batch = new_skills_to_insert[i:i + batch_size]
