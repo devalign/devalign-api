@@ -152,7 +152,7 @@ class SQLSkillRepository(SkillRepository):
                     normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
                     domain_tags=m.domain_tags if m.domain_tags else [],
                     core_domains=m.core_domains if m.core_domains else [],
-                    aliases=[a.alias_name for a in m.aliases],
+                    aliases=s.aliases,
                     relations=s.relations,  # Keep original domain relations in memory
                     weight=float(m.weight),
                     embedding=m.embedding,

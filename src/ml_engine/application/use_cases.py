@@ -1007,10 +1007,12 @@ class NormalizeSkillsUseCase:
         job_offer_repo: MLJobOfferRepository,
         skill_repo: SkillRepository,
         embedding_service: EmbeddingService,
+        llm_service: LLMService | None = None,
     ) -> None:
         self._job_offers = job_offer_repo
         self._skills = skill_repo
         self._embeddings = embedding_service
+        self._llm = llm_service
 
     async def execute(self) -> dict[str, Any]:
         """Run the normalization pipeline for unnormalized job offers."""
@@ -1143,6 +1145,54 @@ class NormalizeSkillsUseCase:
                             "skill_type": "hard_skill",
                         }
                     )
+
+        # 2.5 Classify new skills dynamically using LLM before saving them
+        if new_skills_to_create and self._llm:
+            try:
+                import json
+
+                new_skills_list = list(new_skills_to_create.values())
+                new_names = [s.name for s in new_skills_list]
+
+                logger.info("Classifying new skills dynamically using LLM", count=len(new_names))
+
+                domains = ["Backend", "Frontend", "Mobile", "QA", "DevOps", "Cloud", "Data"]
+                prompt = (
+                    f"You are a technical expert. Classify the following IT skills into one or more of these core domains: {', '.join(domains)}.\n"
+                    "Each skill can belong to multiple domains (e.g. 'AWS' -> ['Cloud', 'DevOps']). If a skill is unrelated, use an empty list [].\n"
+                    "Additionally, generate 2-4 lowercase tag strings (domain_tags) for each skill to help with indexing (e.g. 'PostgreSQL' -> ['database', 'postgresql']).\n"
+                    "Return a JSON object where keys are the skill names (exactly as provided) and values are objects containing 'core_domains' (array) and 'domain_tags' (array).\n"
+                    "Example:\n"
+                    '{"python": {"core_domains": ["Backend"], "domain_tags": ["python", "backend"]}, '
+                    '"aws": {"core_domains": ["Cloud", "DevOps"], "domain_tags": ["cloud", "aws", "infrastructure"]}}\n\n'
+                    f"Skills to classify: {json.dumps(new_names)}"
+                )
+
+                llm_response = await self._llm.generate(prompt)
+                classifications = json.loads(llm_response)
+
+                for norm_name, s in list(new_skills_to_create.items()):
+                    res = classifications.get(s.name) or {}
+                    assigned_domains = res.get("core_domains") or []
+                    assigned_tags = res.get("domain_tags") or []
+
+                    valid_domains = [d for d in assigned_domains if d in domains]
+                    valid_tags = [str(t).lower().strip() for t in assigned_tags]
+
+                    updated_skill = dc_replace(
+                        s, core_domains=valid_domains, domain_tags=valid_tags
+                    )
+                    new_skills_to_create[norm_name] = updated_skill
+                    skill_map[norm_name] = updated_skill
+
+                    logger.info(
+                        "Classified dynamic skill",
+                        skill_name=updated_skill.name,
+                        core_domains=updated_skill.core_domains,
+                        domain_tags=updated_skill.domain_tags,
+                    )
+            except Exception as exc:
+                logger.error("Failed to dynamically classify new skills using LLM", error=str(exc))
 
         # 3. Save new skills to database
         if new_skills_to_create:
