@@ -256,11 +256,13 @@ async def normalize_skills(session: SessionDep) -> dict[str, Any]:
     from src.ml_engine.application.use_cases import NormalizeSkillsUseCase
     from src.ml_engine.infrastructure.embeddings import get_embedding_service
     from src.ml_engine.infrastructure.job_offer_repository import SQLMLJobOfferRepository
+    from src.ml_engine.infrastructure.llm_client import get_llm_service
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
 
     use_case = NormalizeSkillsUseCase(
         job_offer_repo=SQLMLJobOfferRepository(session),
         skill_repo=SQLSkillRepository(session),
         embedding_service=get_embedding_service(),
+        llm_service=get_llm_service(),
     )
     return await use_case.execute()
