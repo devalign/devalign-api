@@ -1,0 +1,45 @@
+name: Weekly Database Enrichment (Embeddings & Domains)
+
+on:
+  schedule:
+    # Se ejecuta todos los lunes a las 08:00 UTC (después del scraping de los domingos)
+    - cron: '0 8 * * 1'
+  workflow_dispatch:
+    # Permite la ejecución manual desde la interfaz de GitHub
+
+jobs:
+  enrich-db:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Backfill Missing Embeddings (Voyage AI)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+          EMBEDDING_PROVIDER: "voyage"
+          EMBEDDING_MODEL: "voyage-4-lite"
+        run: |
+          python scripts/embed_missing_skills.py
+
+      - name: Backfill Missing Core Domains & Tags (OpenAI)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          LLM_PROVIDER: "openai"
+          LLM_MODEL: "gpt-4o-mini"
+        run: |
+          python scripts/backfill_empty_domains_and_tags.py
