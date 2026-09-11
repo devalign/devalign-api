@@ -11,6 +11,7 @@ from src.ml_engine.application.dtos import (
     ClusterDTO,
     DiagnosticDetailDTO,
     GraphResponseDTO,
+    SkillSearchResultDTO,
     SkillsUpdateDTO,
     UserProfileDTO,
 )
@@ -21,7 +22,7 @@ from src.ml_engine.application.use_cases import (
 )
 from src.ml_engine.domain.entities import Skill, SkillNature
 from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
-from src.ml_engine.infrastructure.models import SkillModel
+from src.ml_engine.infrastructure.models import SkillAliasModel, SkillModel
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
 from src.shared.security import CurrentUserIdDep, OptionalUserIdDep
 
@@ -95,30 +96,28 @@ async def update_my_skills(
             )
         detected_skills.append(skill_entity)
 
-    # 2. Recalcular Diagnóstico Activo y Evaluados
+    # 2. Recalcular Diagnóstico Activo y Top 3 Afinidad
     cluster_repo = SQLClusterRepository(session)
-    existing_diagnostics = [profile.primary_affinity, *profile.secondary_affinities]
-    existing_diagnostics = [a for a in existing_diagnostics if a.cluster_name != "Sin Diagnóstico"]
+    active_clusters = await cluster_repo.get_all_active()
+    clusters_to_eval = [c for c in active_clusters if c.centroid_skills]
 
-    clusters_to_eval = []
-    for diag in existing_diagnostics:
-        if diag.cluster_id is not None:
-            cluster = await cluster_repo.get_by_id(diag.cluster_id)
-            if cluster:
-                clusters_to_eval.append(cluster)
-
-    if not clusters_to_eval:
-        active_clusters = await cluster_repo.get_all_active()
-        clusters_to_eval = [c for c in active_clusters if c.centroid_skills]
-
-    # Recalcular affinities
     from src.ml_engine.application.use_cases import compute_affinities_and_domains
 
-    primary, secondaries, _all_affinities, _ = compute_affinities_and_domains(
+    _primary_raw, _secondaries_raw, all_affinities_raw, _ = compute_affinities_and_domains(
         detected_skills, clusters_to_eval
     )
 
-    if not primary:
+    if all_affinities_raw:
+        valid_affinities = [a for a in all_affinities_raw if a.affinity_score > 0]
+        if not valid_affinities:
+            valid_affinities = all_affinities_raw[:1]
+        top_affinities = valid_affinities[:3]
+
+        from dataclasses import replace as dc_replace_affinity
+
+        primary = dc_replace_affinity(top_affinities[0], is_primary=True)
+        secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
+    else:
         from uuid import uuid4
 
         from src.ml_engine.domain.entities import ClusterAffinity
@@ -240,6 +239,88 @@ async def get_skills_graph(
 
     uid = UUID(current_user_id) if current_user_id else None
     return await use_case.execute(user_id=uid, cluster_name=cluster)
+
+
+@market_router.get(
+    "/skills/search",
+    response_model=list[SkillSearchResultDTO],
+    summary="Search skills catalog and aliases for autocomplete",
+)
+@me_router.get(
+    "/skills/search",
+    response_model=list[SkillSearchResultDTO],
+    summary="Search skills catalog and aliases for autocomplete",
+)
+async def search_skills(
+    q: str,
+    session: SessionDep,
+    limit: int = 20,
+) -> list[SkillSearchResultDTO]:
+    """Search canonical skills and aliases with prefix and exact-match ranking."""
+    query = q.strip()
+    if not query:
+        return []
+
+    pattern = f"%{query}%"
+    exact_lower = query.lower()
+
+    # 1. Search in canonical skills
+    stmt_skills = select(SkillModel).where(SkillModel.name.ilike(pattern)).limit(limit * 2)
+    res_skills = await session.execute(stmt_skills)
+    matched_skills = res_skills.scalars().all()
+
+    # 2. Search in aliases
+    stmt_aliases = (
+        select(SkillAliasModel, SkillModel)
+        .join(SkillModel, SkillAliasModel.skill_id == SkillModel.skill_id)
+        .where(SkillAliasModel.alias_name.ilike(pattern))
+        .limit(limit * 2)
+    )
+    res_aliases = await session.execute(stmt_aliases)
+    matched_aliases = res_aliases.all()
+
+    def score_match(text: str) -> int:
+        tl = text.lower()
+        if tl == exact_lower:
+            return 3
+        if tl.startswith(exact_lower):
+            return 2
+        return 1
+
+    seen_ids: set[UUID] = set()
+    results: list[SkillSearchResultDTO] = []
+
+    for s in sorted(matched_skills, key=lambda x: score_match(x.name), reverse=True):
+        if s.skill_id not in seen_ids:
+            seen_ids.add(s.skill_id)
+            results.append(
+                SkillSearchResultDTO(
+                    id=s.skill_id,
+                    name=s.name,
+                    skill_type=s.nature or "tech",
+                    domain_tags=s.domain_tags or [],
+                    core_domains=s.core_domains or [],
+                )
+            )
+
+    for alias, s in sorted(
+        matched_aliases, key=lambda pair: score_match(pair[0].alias_name), reverse=True
+    ):
+        if s.skill_id not in seen_ids:
+            seen_ids.add(s.skill_id)
+            results.append(
+                SkillSearchResultDTO(
+                    id=s.skill_id,
+                    name=s.name,
+                    skill_type=s.nature or "tech",
+                    domain_tags=s.domain_tags or [],
+                    core_domains=s.core_domains or [],
+                    matched_alias=alias.alias_name,
+                )
+            )
+
+    results.sort(key=lambda r: score_match(r.matched_alias or r.name), reverse=True)
+    return results[:limit]
 
 
 # === ADMIN ROUTER ===

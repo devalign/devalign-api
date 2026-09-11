@@ -36,6 +36,7 @@ class SkillDTO(BaseModel):
     has_certification: bool = False
     ict_score: float = 0.0
     trend: str | None = None
+    is_custom: bool = False
 
 
 class DomainAffinityDTO(BaseModel):
@@ -150,3 +151,12 @@ class GraphLinkDTO(BaseModel):
 class GraphResponseDTO(BaseModel):
     nodes: list[GraphNodeDTO]
     links: list[GraphLinkDTO]
+
+
+class SkillSearchResultDTO(BaseModel):
+    id: UUID
+    name: str
+    skill_type: str = "tech"
+    domain_tags: list[str] = []
+    core_domains: list[str] = []
+    matched_alias: str | None = None

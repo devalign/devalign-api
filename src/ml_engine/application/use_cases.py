@@ -205,6 +205,7 @@ class ProfileUserFromCVUseCase:
                 personal_projects = bool(evidence.get("personal_projects", False))
                 years_exp = int(evidence.get("years_of_experience", 0) or 0)
                 has_cert = bool(evidence.get("has_certification", False))
+                is_custom = bool(evidence.get("is_custom", getattr(skill, "is_custom", False)))
 
                 stamped_skill = dc_replace(
                     skill,
@@ -212,6 +213,7 @@ class ProfileUserFromCVUseCase:
                     personal_projects=personal_projects,
                     years_of_experience=years_exp,
                     has_certification=has_cert,
+                    is_custom=is_custom,
                 )
                 stamped_skill = dc_replace(stamped_skill, ict_score=stamped_skill.calculate_ict())
                 decorated_skills.append(stamped_skill)
@@ -428,6 +430,19 @@ class ProfileUserFromCVUseCase:
 
         extracted_data = await self._combined_llm_extraction(cv_text)
 
+        # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
+        if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
+            try:
+                extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
+                    extracted_data["skills"]
+                )
+                logger.info(
+                    "Pre-normalized extracted skills against catalog",
+                    count=len(extracted_data["skills"]),
+                )
+            except Exception as exc:
+                logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
+
         return {
             "cv_text": cv_text,
             "extracted_data": extracted_data,
@@ -465,6 +480,7 @@ class ProfileUserFromCVUseCase:
                     "years_of_experience": s.years_of_experience or 0,
                     "personal_projects": s.personal_projects or False,
                     "has_certification": s.has_certification or False,
+                    "is_custom": getattr(s, "is_custom", False),
                 }
                 for s in validated_skills
             ]
@@ -479,6 +495,7 @@ class ProfileUserFromCVUseCase:
                         "years_of_experience": s.years_of_experience or 0,
                         "personal_projects": s.personal_projects or False,
                         "has_certification": s.has_certification or False,
+                        "is_custom": getattr(s, "is_custom", False),
                     }
                 )
             raw_skills = extracted_data_skills if extracted_data_skills else []
@@ -535,12 +552,12 @@ class ProfileUserFromCVUseCase:
             )
 
         # Compute Weighted Jaccard Similarity per cluster
-        primary, _secondaries, _affinities, _ = compute_affinities_and_domains(
-            detected_skills, active_clusters
+        _primary_raw, _secondaries_raw, affinities_raw, domain_affinities_dto = (
+            compute_affinities_and_domains(detected_skills, active_clusters)
         )
-        if not primary:
+        if not affinities_raw:
             logger.warning(
-                "No primary cluster affinity — skipping Phase 2",
+                "No cluster affinities — skipping Phase 2",
                 user_id=str(user_id),
             )
             return UserProfileDTO(
@@ -552,6 +569,17 @@ class ProfileUserFromCVUseCase:
                 full_name=profile.full_name,
                 message="Profile saved. Could not compute cluster affinity.",
             )
+
+        # Select Top 3 affinities with affinity_score > 0
+        valid_affinities = [a for a in affinities_raw if a.affinity_score > 0]
+        if not valid_affinities:
+            valid_affinities = affinities_raw[:1]
+        top_affinities = valid_affinities[:3]
+
+        from dataclasses import replace as dc_replace_affinity
+
+        primary = dc_replace_affinity(top_affinities[0], is_primary=True)
+        secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
 
         # Detect skill gaps vs primary cluster
         primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
@@ -576,8 +604,13 @@ class ProfileUserFromCVUseCase:
                     skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
             skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
-        # Persist enriched profile with is_diagnosed=True
-        logger.info("Phase 2 — persisting full diagnosis", user_id=str(user_id))
+        # Persist enriched profile with is_diagnosed=True and Top 3 affinities
+        logger.info(
+            "Phase 2 — persisting full diagnosis with Top 3 affinities",
+            user_id=str(user_id),
+            primary=primary.cluster_name,
+            secondaries=[s.cluster_name for s in secondaries],
+        )
         from dataclasses import replace as dc_replace_profile
 
         diagnosed_profile = dc_replace_profile(
@@ -586,7 +619,7 @@ class ProfileUserFromCVUseCase:
             detected_skills=detected_skills,
             seniority=seniority,
             primary_affinity=primary,
-            secondary_affinities=[],
+            secondary_affinities=secondaries,
             skill_gaps=skill_gaps,
             is_diagnosed=True,
         )
@@ -599,65 +632,11 @@ class ProfileUserFromCVUseCase:
             score=primary.affinity_score,
         )
 
-        # Build the response DTO
-        _, _, _, domain_affinities_dto = compute_affinities_and_domains(
-            detected_skills, active_clusters
-        )
+        # Build response DTOs for all Top 3 affinities
         user_skills_map = {s.normalized_name: s for s in detected_skills}
-
-        primary_dto = ClusterAffinityDTO(
-            cluster_id=primary.cluster_id,
-            cluster_name=primary.cluster_name,
-            affinity_score=primary.affinity_score,
-            is_primary=True,
-            market_insights=primary.market_insights,
-            compatible_roles=primary.compatible_roles,
-            detected_skills=[
-                SkillDTO(
-                    name=s.name,
-                    skill_type=s.nature.value,
-                    market_importance="critical"
-                    if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
-                    else (
-                        "high"
-                        if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
-                        else "medium"
-                    ),
-                    market_demand_percentage=round(s.frequency * 100)
-                    if s.frequency is not None
-                    else 100,
-                    self_taught=user_skills_map[s.normalized_name].self_taught
-                    if s.normalized_name in user_skills_map
-                    else False,
-                    personal_projects=user_skills_map[s.normalized_name].personal_projects
-                    if s.normalized_name in user_skills_map
-                    else False,
-                    years_of_experience=user_skills_map[s.normalized_name].years_of_experience
-                    if s.normalized_name in user_skills_map
-                    else 0,
-                    has_certification=user_skills_map[s.normalized_name].has_certification
-                    if s.normalized_name in user_skills_map
-                    else False,
-                    ict_score=user_skills_map[s.normalized_name].ict_score
-                    if s.normalized_name in user_skills_map
-                    else 0.0,
-                    trend=determine_trend(s.name),
-                )
-                for s in primary.detected_skills
-            ],
-            skill_gaps=[
-                SkillDTO(
-                    name=g.skill.name,
-                    skill_type=g.skill.nature.value,
-                    market_importance=g.market_importance,
-                    market_demand_percentage=round(g.skill.frequency * 100)
-                    if g.skill.frequency is not None
-                    else None,
-                    trend=determine_trend(g.skill.name),
-                )
-                for g in primary.skill_gaps
-            ],
-        )
+        primary_dto = _cluster_affinity_to_dto(primary, True, user_skills_map)
+        secondaries_dto = [_cluster_affinity_to_dto(a, False, user_skills_map) for a in secondaries]
+        all_affinities_dto = [primary_dto, *secondaries_dto]
 
         return UserProfileDTO(
             user_id=user_id,
@@ -665,8 +644,8 @@ class ProfileUserFromCVUseCase:
             seniority=seniority.value,
             primary_specialty=primary.cluster_name,
             alignment_score=primary.affinity_score,
-            secondary_affinities=[],
-            all_affinities=[primary_dto],
+            secondary_affinities=secondaries_dto,
+            all_affinities=all_affinities_dto,
             domain_affinities=domain_affinities_dto,
             detected_skills=[
                 SkillDTO(
@@ -682,6 +661,7 @@ class ProfileUserFromCVUseCase:
                     has_certification=s.has_certification,
                     ict_score=s.ict_score,
                     trend=determine_trend(s.name),
+                    is_custom=getattr(s, "is_custom", False),
                 )
                 for s in detected_skills
             ],
@@ -850,6 +830,70 @@ def determine_trend(name: str) -> str:
     return MOCK_TRENDS.get(norm_name, "stable")
 
 
+def _cluster_affinity_to_dto(
+    affinity: ClusterAffinity,
+    is_primary: bool,
+    user_skills_map: dict[str, Any],
+) -> ClusterAffinityDTO:
+    """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
+    return ClusterAffinityDTO(
+        cluster_id=affinity.cluster_id,
+        cluster_name=affinity.cluster_name,
+        affinity_score=affinity.affinity_score,
+        is_primary=is_primary,
+        market_insights=affinity.market_insights,
+        compatible_roles=affinity.compatible_roles,
+        ai_insight=affinity.ai_insight,
+        job_offer_count=affinity.job_offer_count,
+        top_skills=affinity.top_skills,
+        detected_skills=[
+            SkillDTO(
+                name=s.name,
+                skill_type=s.nature.value,
+                market_importance="critical"
+                if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
+                else (
+                    "high"
+                    if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
+                    else "medium"
+                ),
+                market_demand_percentage=round(s.frequency * 100)
+                if s.frequency is not None
+                else 100,
+                self_taught=user_skills_map[s.normalized_name].self_taught
+                if s.normalized_name in user_skills_map
+                else False,
+                personal_projects=user_skills_map[s.normalized_name].personal_projects
+                if s.normalized_name in user_skills_map
+                else False,
+                years_of_experience=user_skills_map[s.normalized_name].years_of_experience
+                if s.normalized_name in user_skills_map
+                else 0,
+                has_certification=user_skills_map[s.normalized_name].has_certification
+                if s.normalized_name in user_skills_map
+                else False,
+                ict_score=user_skills_map[s.normalized_name].ict_score
+                if s.normalized_name in user_skills_map
+                else 0.0,
+                trend=determine_trend(s.name),
+            )
+            for s in affinity.detected_skills
+        ],
+        skill_gaps=[
+            SkillDTO(
+                name=g.skill.name,
+                skill_type=g.skill.nature.value,
+                market_importance=g.market_importance,
+                market_demand_percentage=round(g.skill.frequency * 100)
+                if g.skill.frequency is not None
+                else None,
+                trend=determine_trend(g.skill.name),
+            )
+            for g in affinity.skill_gaps
+        ],
+    )
+
+
 # === Helpers ===
 
 
@@ -873,6 +917,16 @@ If the text IS a CV, extract ALL of the following details in a structured JSON f
 2. Professional Summary (professional_summary): a 1-2 sentence summary of the candidate's profile
 3. Years of experience (years_experience): total years of professional experience (integer or null)
 4. Skills (skills): an exhaustive array of skill objects. Extract EVERY SINGLE programming language, database, framework, library, tool, cloud provider, methodology, and engineering concept mentioned in the CV. Do NOT extract soft skills (e.g., leadership, communication, teamwork, time management). Focus strictly on technical skills and tools. The list should be exhaustive (typically 20-50 items for a technical profile).
+
+CRITICAL RULE FOR PARENTHESES AND SUB-TOOLS:
+When technologies or tools are listed inside parentheses, slashes, or bullet sub-lists, you MUST extract EACH item individually as its own separate skill object in addition to the parent concept. Never group them into a single string or omit them.
+Examples:
+- "CI/CD (Bitbucket, Jenkins, GitHub Actions)" -> MUST extract 4 individual skills: "CI/CD", "Bitbucket", "Jenkins", "GitHub Actions".
+- "Cloud: Azure (APIM, Functions, Key Vault, Service Bus, Blob Storage, DevOps)" -> MUST extract: "Azure", "Azure Functions", "Azure Key Vault", "Azure Service Bus", "Azure Blob Storage", "Azure DevOps", "APIM".
+- "AWS (Lambda, EC2, Api Gateway, RDS, S3)" -> MUST extract: "AWS", "AWS Lambda", "Amazon EC2", "API Gateway", "Amazon RDS", "Amazon S3".
+- "Languages: Java (Spring Boot, Spring WebFlux, Spring Cloud, Hibernate)" -> MUST extract: "Java", "Spring Boot", "Spring WebFlux", "Spring Cloud", "Hibernate".
+- "TypeScript/JavaScript (Angular, Vue.js, Nuxt.js)" -> MUST extract: "TypeScript", "JavaScript", "Angular", "Vue.js", "Nuxt.js".
+- "Databases: SQL • NoSQL • RabbitMQ • Apache Kafka" -> MUST extract: "SQL", "NoSQL", "RabbitMQ", "Apache Kafka".
 
 For each skill, extract:
 - name: the skill name exactly as it appears
@@ -950,6 +1004,66 @@ If it IS a CV, use this schema:
 }}"""
 
 
+def _clean_and_unpack_skills(parsed: dict[str, Any]) -> dict[str, Any]:
+    """Ensure skills grouped in parentheses or slashes are unpacked into individual items."""
+    import re
+
+    raw_skills = parsed.get("skills", [])
+    if not isinstance(raw_skills, list):
+        return parsed
+
+    unpacked_skills: list[dict[str, Any]] = []
+    seen_names: set[str] = set()
+
+    for item in raw_skills:
+        if not isinstance(item, dict) or "name" not in item:
+            continue
+
+        orig_name = str(item["name"]).strip()
+        if not orig_name:
+            continue
+
+        # Check if the name has parentheses with items, e.g. "CI/CD (Bitbucket, Jenkins, GitHub Actions)"
+        paren_match = re.search(r"^(.*?)\s*\((.*?)\)$", orig_name)
+        if paren_match:
+            main_part = paren_match.group(1).strip()
+            sub_items = [s.strip() for s in paren_match.group(2).split(",") if s.strip()]
+
+            candidates = [main_part] if main_part else []
+            for sub in sub_items:
+                if main_part.lower() in ("azure", "aws", "spring") and not sub.lower().startswith(
+                    main_part.lower()
+                ):
+                    candidates.append(f"{main_part} {sub}")
+                candidates.append(sub)
+
+            for cand in candidates:
+                cand_lower = cand.lower()
+                if cand_lower not in seen_names and len(cand) >= 2:
+                    seen_names.add(cand_lower)
+                    new_item = dict(item)
+                    new_item["name"] = cand
+                    unpacked_skills.append(new_item)
+        else:
+            if "/" in orig_name and not orig_name.lower().startswith("ci/cd"):
+                slash_parts = [p.strip() for p in orig_name.split("/") if p.strip()]
+                for p in slash_parts:
+                    p_lower = p.lower()
+                    if p_lower not in seen_names and len(p) >= 2:
+                        seen_names.add(p_lower)
+                        new_item = dict(item)
+                        new_item["name"] = p
+                        unpacked_skills.append(new_item)
+            else:
+                name_lower = orig_name.lower()
+                if name_lower not in seen_names:
+                    seen_names.add(name_lower)
+                    unpacked_skills.append(item)
+
+    parsed["skills"] = unpacked_skills
+    return parsed
+
+
 def _parse_cv_extraction_output(raw_output: str) -> dict[str, Any]:
     """Parse JSON block from LLM output."""
     try:
@@ -960,7 +1074,7 @@ def _parse_cv_extraction_output(raw_output: str) -> dict[str, Any]:
         parsed = json.loads(raw_output[start:end])
         if not isinstance(parsed, dict):
             raise ValueError("Parsed output is not a dictionary")
-        return parsed
+        return _clean_and_unpack_skills(parsed)
     except Exception as exc:
         logger.warning(
             "Failed to parse LLM CV extraction, fallback to empty defaults", error=str(exc)
@@ -1233,6 +1347,30 @@ class NormalizeSkillsUseCase:
         }
 
 
+def normalize_domain_key(domain_str: str) -> list[str]:
+    """Normalize domain strings to canonical title-case names."""
+    clean = domain_str.strip().lower()
+    if clean in ("backend",):
+        return ["Backend"]
+    if clean in ("frontend",):
+        return ["Frontend"]
+    if clean in ("devops",):
+        return ["DevOps"]
+    if clean in ("cloud",):
+        return ["Cloud"]
+    if clean in ("cloud_devops", "cloud/devops"):
+        return ["Cloud", "DevOps"]
+    if clean in ("data", "data engineering", "data_engineering", "data science"):
+        return ["Data"]
+    if clean in ("qa", "testing", "quality assurance"):
+        return ["QA"]
+    if clean in ("mobile", "ios", "android"):
+        return ["Mobile"]
+    if clean in ("software_engineering", "security"):
+        return []
+    return [domain_str.strip().capitalize()]
+
+
 def compute_affinities_and_domains(
     detected_skills: list[Skill],
     active_clusters: list[TechCluster],
@@ -1393,20 +1531,29 @@ def compute_affinities_and_domains(
     for s in detected_skills:
         if s.core_domains:
             for d in s.core_domains:
-                if d not in domain_scores:
-                    domain_scores[d] = 0.0
-                domain_scores[d] += s.weight * s.frequency
+                for norm_d in normalize_domain_key(d):
+                    if norm_d not in domain_scores:
+                        domain_scores[norm_d] = 0.0
+                    domain_scores[norm_d] += s.weight * (
+                        s.frequency if s.frequency is not None else 1.0
+                    )
 
-    # Calcular promedios de demanda de mercado por dominio
+    # Calcular promedios de demanda de mercado por dominio normalizado
     domain_demands_accum: dict[str, list[float]] = {}
     for cluster in active_clusters:
         for skill in cluster.centroid_skills:
-            if skill.domain_tags:
+            if skill.core_domains:
+                for d in skill.core_domains:
+                    for norm_d in normalize_domain_key(d):
+                        if norm_d not in domain_demands_accum:
+                            domain_demands_accum[norm_d] = []
+                        domain_demands_accum[norm_d].append(skill.frequency)
+            elif skill.domain_tags:
                 for d in skill.domain_tags:
-                    d_clean = d.strip().lower()
-                    if d_clean not in domain_demands_accum:
-                        domain_demands_accum[d_clean] = []
-                    domain_demands_accum[d_clean].append(skill.frequency)
+                    for norm_d in normalize_domain_key(d):
+                        if norm_d not in domain_demands_accum:
+                            domain_demands_accum[norm_d] = []
+                        domain_demands_accum[norm_d].append(skill.frequency)
 
     domain_market_demand = {
         d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
@@ -1417,7 +1564,7 @@ def compute_affinities_and_domains(
         DomainAffinityDTO(
             domain=d,
             affinity_score=score / total_domain_score,
-            market_demand=domain_market_demand.get(d.strip().lower(), 0.5),
+            market_demand=domain_market_demand.get(d, 0.5),
         )
         for d, score in domain_scores.items()
     ]
@@ -1601,19 +1748,28 @@ def compute_domain_affinities(
     for s in detected_skills:
         if s.core_domains:
             for d in s.core_domains:
-                if d not in domain_scores:
-                    domain_scores[d] = 0.0
-                domain_scores[d] += s.weight * (s.frequency if s.frequency is not None else 1.0)
+                for norm_d in normalize_domain_key(d):
+                    if norm_d not in domain_scores:
+                        domain_scores[norm_d] = 0.0
+                    domain_scores[norm_d] += s.weight * (
+                        s.frequency if s.frequency is not None else 1.0
+                    )
 
     domain_demands_accum: dict[str, list[float]] = {}
     for cluster in active_clusters:
         for skill in cluster.centroid_skills:
             if skill.core_domains:
                 for d in skill.core_domains:
-                    d_clean = d.strip().lower()
-                    if d_clean not in domain_demands_accum:
-                        domain_demands_accum[d_clean] = []
-                    domain_demands_accum[d_clean].append(skill.frequency)
+                    for norm_d in normalize_domain_key(d):
+                        if norm_d not in domain_demands_accum:
+                            domain_demands_accum[norm_d] = []
+                        domain_demands_accum[norm_d].append(skill.frequency)
+            elif skill.domain_tags:
+                for d in skill.domain_tags:
+                    for norm_d in normalize_domain_key(d):
+                        if norm_d not in domain_demands_accum:
+                            domain_demands_accum[norm_d] = []
+                        domain_demands_accum[norm_d].append(skill.frequency)
 
     domain_market_demand = {
         d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
@@ -1624,7 +1780,7 @@ def compute_domain_affinities(
         DomainAffinityDTO(
             domain=d,
             affinity_score=score / total_domain_score,
-            market_demand=domain_market_demand.get(d.strip().lower(), 0.5),
+            market_demand=domain_market_demand.get(d, 0.5),
         )
         for d, score in domain_scores.items()
     ]
@@ -1678,6 +1834,26 @@ class GetMyProfileUseCase:
 
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
+
+        # Derive secondary affinities on-the-fly for diagnosed profiles where secondaries were not stored
+        if (
+            (not secondaries or len(secondaries) == 0)
+            and profile.is_diagnosed
+            and profile.detected_skills
+            and len(active_clusters) > 1
+        ):
+            _p_raw, _s_raw, all_raw, _ = compute_affinities_and_domains(
+                profile.detected_skills, active_clusters
+            )
+            if all_raw:
+                valid_aff = [a for a in all_raw if a.affinity_score > 0] or all_raw[:1]
+                top_aff = valid_aff[:3]
+                from dataclasses import replace as dc_replace_aff
+
+                if not primary or primary.cluster_name == "Sin Diagnóstico":
+                    primary = dc_replace_aff(top_aff[0], is_primary=True)
+                secondaries = [dc_replace_aff(a, is_primary=False) for a in top_aff[1:]]
+
         all_affinities = (
             [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
         )
@@ -1823,6 +1999,7 @@ class GetMyProfileUseCase:
                     has_certification=s.has_certification,
                     ict_score=s.ict_score,
                     trend=determine_trend(s.name),
+                    is_custom=getattr(s, "is_custom", False),
                 )
                 for s in profile.detected_skills
             ],

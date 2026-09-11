@@ -81,6 +81,7 @@ class Skill:
     years_of_experience: int = 0
     has_certification: bool = False
     ict_score: float = 0.0
+    is_custom: bool = False
 
     def calculate_ict(self) -> float:
         exp_points = 3 * self.years_of_experience
