@@ -35,6 +35,7 @@ Thumbs.db
 
 # Data (sensitive or large)
 data/raw/
+scripts/data/
 
 # Alembic
 alembic/versions/*.pyc
