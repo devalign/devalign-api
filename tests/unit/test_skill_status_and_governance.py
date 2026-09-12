@@ -2,10 +2,8 @@
 
 from uuid import uuid4
 
-import pytest
-
 from src.ml_engine.application.dtos import SkillSearchResultDTO
-from src.ml_engine.domain.entities import Skill, SkillNature, SkillStandard, SkillStatus
+from src.ml_engine.domain.entities import Skill, SkillNature, SkillStatus
 from src.ml_engine.infrastructure.models import SkillModel, SkillStandardModel
 
 

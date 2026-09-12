@@ -11,6 +11,8 @@ from src.ml_engine.domain.ports import EmbeddingService, LLMService, SkillReposi
 
 logger = structlog.get_logger(__name__)
 
+SINGLE_SLASH_TERMS: set[str] = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
+
 
 def build_skill_lookup_indexes(
     skills: list[Skill],
@@ -173,7 +175,6 @@ class SkillCatalogService:
         alias_to_skill, norm_to_skill = build_skill_lookup_indexes(existing_skills)
         all_alias_keys = list(alias_to_skill.keys())
 
-        SINGLE_SLASH_TERMS = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
         expanded_raw: list[dict[str, Any]] = []
         for item in raw_skills:
             if not isinstance(item, dict):
@@ -285,7 +286,6 @@ class SkillCatalogService:
         """
         # Clean inputs and split compound terms like "JavaScript/TypeScript"
         clean_strings = []
-        SINGLE_SLASH_TERMS = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
         for raw_str in raw_strings:
             if isinstance(raw_str, str) and raw_str.strip():
                 trimmed = raw_str.strip()

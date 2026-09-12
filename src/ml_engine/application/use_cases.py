@@ -1145,10 +1145,11 @@ class NormalizeSkillsUseCase:
         import numpy as np
 
         from src.ml_engine.application.skill_catalog_service import (
+            SINGLE_SLASH_TERMS,
             build_skill_lookup_indexes,
             match_single_skill,
         )
-        from src.ml_engine.domain.entities import Skill, SkillNature, SkillStatus
+        from src.ml_engine.domain.entities import Skill
 
         logger.info("Starting Skill Normalization Pipeline")
 
@@ -1163,13 +1164,10 @@ class NormalizeSkillsUseCase:
         alias_to_skill, norm_to_skill = build_skill_lookup_indexes(existing_skills)
         skill_map: dict[str, Skill] = {s.normalized_name: s for s in existing_skills}
 
-        new_skills_to_create: dict[str, Skill] = {}
         processed_offer_ids = []
 
         # Gather unique skills in this batch that are not matched
         unmapped_raw_skills: dict[str, str] = {}  # norm_name -> raw_name
-
-        SINGLE_SLASH_TERMS = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
 
         for offer in offers:
             processed_offer_ids.append(offer["id"])
