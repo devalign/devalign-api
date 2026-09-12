@@ -138,8 +138,6 @@ def match_single_skill(
 
 _match_single_skill = match_single_skill
 
-
-
 class SkillCatalogService:
     def __init__(
         self,

@@ -40,6 +40,7 @@ class SkillDTO(BaseModel):
     suggested_canonical: str | None = None
 
 
+
 class DomainAffinityDTO(BaseModel):
     domain: str
     affinity_score: float

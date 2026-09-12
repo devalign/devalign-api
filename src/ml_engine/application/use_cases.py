@@ -937,6 +937,7 @@ CRITICAL NORMALIZATION RULES FOR SKILL NAMES:
   Examples: "React avanzado" -> "React", "Senior Java" -> "Java", "Basic SQL" -> "SQL".
 - SPLIT COMPOUND SLASHES: Slashes like "JavaScript/TypeScript" represent two distinct skills. Always extract each individually ("JavaScript", "TypeScript"). Only preserve true single acronyms containing slashes ("CI/CD", "TCP/IP", "I/O", "PL/SQL", "Client/Server").
 
+
 For each skill, extract:
 - name: the canonical technology/tool name (strictly applying the normalization rules above: no versions, no prefixes, no qualifiers)
 - category: one of "technical", "tools", or "methodologies"

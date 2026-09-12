@@ -332,6 +332,7 @@ async def search_skills(
                 )
             )
 
+
     results.sort(key=lambda r: score_match(r.matched_alias or r.name), reverse=True)
     return results[:limit]
 
