@@ -1231,7 +1231,10 @@ class NormalizeSkillsUseCase:
                 "none specified",
                 "n/a",
             )
-            if any(phrase in clean_name.lower() for phrase in hallucination_phrases) or len(clean_name) > 80:
+            if (
+                any(phrase in clean_name.lower() for phrase in hallucination_phrases)
+                or len(clean_name) > 80
+            ):
                 logger.info(f"Skipping hallucinated or invalid skill candidate: '{clean_name}'")
                 continue
 

@@ -50,7 +50,9 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         )
         for s in m.standards
     ]
-    status_val = SkillStatus(m.status) if hasattr(m, "status") and m.status else SkillStatus.CANONICAL
+    status_val = (
+        SkillStatus(m.status) if hasattr(m, "status") and m.status else SkillStatus.CANONICAL
+    )
     return Skill(
         id=m.skill_id,
         name=m.name,
@@ -65,7 +67,6 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         weight=float(m.weight),
         embedding=m.embedding,
     )
-
 
 
 class SQLSkillRepository(SkillRepository):
@@ -154,7 +155,9 @@ class SQLSkillRepository(SkillRepository):
                 Skill(
                     id=m.skill_id,
                     name=m.name,
-                    status=SkillStatus(m.status) if hasattr(m, "status") and m.status else SkillStatus.CANONICAL,
+                    status=SkillStatus(m.status)
+                    if hasattr(m, "status") and m.status
+                    else SkillStatus.CANONICAL,
                     nature=SkillNature(m.nature) if m.nature else SkillNature.TECH,
                     normalized_name=m.name.lower().replace(" ", "").replace(".", ""),
                     domain_tags=m.domain_tags if m.domain_tags else [],

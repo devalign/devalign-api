@@ -140,6 +140,7 @@ def match_single_skill(
 
 _match_single_skill = match_single_skill
 
+
 class SkillCatalogService:
     def __init__(
         self,
@@ -214,7 +215,9 @@ class SkillCatalogService:
             else:
                 # Fuzzy fallback matching against canonical catalog
                 clean_lower = raw_name.lower()
-                close_matches = difflib.get_close_matches(clean_lower, all_alias_keys, n=1, cutoff=0.78)
+                close_matches = difflib.get_close_matches(
+                    clean_lower, all_alias_keys, n=1, cutoff=0.78
+                )
 
                 if close_matches:
                     best_match_key = close_matches[0]
@@ -230,7 +233,9 @@ class SkillCatalogService:
                         processed_item["is_custom"] = False
                         processed_item["suggested_canonical"] = None
                         processed_item["category"] = (
-                            "concept" if matched_candidate.nature == SkillNature.CONCEPT else "technical"
+                            "concept"
+                            if matched_candidate.nature == SkillNature.CONCEPT
+                            else "technical"
                         )
                     else:
                         norm_key = raw_name.lower()

@@ -154,4 +154,3 @@ async def test_normalize_extracted_skills_fuzzy_matching_and_suggestion(mock_cat
     assert "FastAPIJS" in norm_map
     assert norm_map["FastAPIJS"]["is_custom"] is True
     assert norm_map["FastAPIJS"]["suggested_canonical"] == "FastAPI"
-

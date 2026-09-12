@@ -53,13 +53,9 @@ def test_build_skill_lookup_indexes_and_matching():
     )
 
     # 3. Conversational prefixes
+    assert match_single_skill("lenguaje Python", alias_to_skill, norm_to_skill) == python_canonical
     assert (
-        match_single_skill("lenguaje Python", alias_to_skill, norm_to_skill)
-        == python_canonical
-    )
-    assert (
-        match_single_skill("herramienta Docker", alias_to_skill, norm_to_skill)
-        == docker_canonical
+        match_single_skill("herramienta Docker", alias_to_skill, norm_to_skill) == docker_canonical
     )
 
     # 4. Hallucinations and invalid inputs are rejected
@@ -67,10 +63,7 @@ def test_build_skill_lookup_indexes_and_matching():
         match_single_skill("Python (no mencionado en la vacante)", alias_to_skill, norm_to_skill)
         is None
     )
-    assert (
-        match_single_skill("AWS (not mentioned)", alias_to_skill, norm_to_skill)
-        is None
-    )
+    assert match_single_skill("AWS (not mentioned)", alias_to_skill, norm_to_skill) is None
     assert match_single_skill("a" * 100, alias_to_skill, norm_to_skill) is None
     assert match_single_skill("", alias_to_skill, norm_to_skill) is None
 

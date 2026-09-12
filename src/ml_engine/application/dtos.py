@@ -40,7 +40,6 @@ class SkillDTO(BaseModel):
     suggested_canonical: str | None = None
 
 
-
 class DomainAffinityDTO(BaseModel):
     domain: str
     affinity_score: float
@@ -164,4 +163,3 @@ class SkillSearchResultDTO(BaseModel):
     domain_tags: list[str] = []
     core_domains: list[str] = []
     matched_alias: str | None = None
-
