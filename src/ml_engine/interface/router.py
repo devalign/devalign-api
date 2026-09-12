@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
 from src.dependencies import SessionDep
 from src.ml_engine.application.dtos import (
@@ -264,16 +265,22 @@ async def search_skills(
     pattern = f"%{query}%"
     exact_lower = query.lower()
 
-    # 1. Search in canonical skills
-    stmt_skills = select(SkillModel).where(SkillModel.name.ilike(pattern)).limit(limit * 2)
+    # 1. Search in canonical skills (only status == 'canonical')
+    stmt_skills = (
+        select(SkillModel)
+        .options(selectinload(SkillModel.standards))
+        .where(SkillModel.status == "canonical", SkillModel.name.ilike(pattern))
+        .limit(limit * 2)
+    )
     res_skills = await session.execute(stmt_skills)
     matched_skills = res_skills.scalars().all()
 
-    # 2. Search in aliases
+    # 2. Search in aliases (only status == 'canonical')
     stmt_aliases = (
         select(SkillAliasModel, SkillModel)
+        .options(selectinload(SkillAliasModel.skill).selectinload(SkillModel.standards))
         .join(SkillModel, SkillAliasModel.skill_id == SkillModel.skill_id)
-        .where(SkillAliasModel.alias_name.ilike(pattern))
+        .where(SkillModel.status == "canonical", SkillAliasModel.alias_name.ilike(pattern))
         .limit(limit * 2)
     )
     res_aliases = await session.execute(stmt_aliases)
@@ -293,11 +300,14 @@ async def search_skills(
     for s in sorted(matched_skills, key=lambda x: score_match(x.name), reverse=True):
         if s.skill_id not in seen_ids:
             seen_ids.add(s.skill_id)
+            std_name = s.standards[0].standard_name if s.standards else None
             results.append(
                 SkillSearchResultDTO(
                     id=s.skill_id,
                     name=s.name,
                     skill_type=s.nature or "tech",
+                    status=s.status,
+                    standard_name=std_name,
                     domain_tags=s.domain_tags or [],
                     core_domains=s.core_domains or [],
                 )
@@ -308,11 +318,14 @@ async def search_skills(
     ):
         if s.skill_id not in seen_ids:
             seen_ids.add(s.skill_id)
+            std_name = s.standards[0].standard_name if s.standards else None
             results.append(
                 SkillSearchResultDTO(
                     id=s.skill_id,
                     name=s.name,
                     skill_type=s.nature or "tech",
+                    status=s.status,
+                    standard_name=std_name,
                     domain_tags=s.domain_tags or [],
                     core_domains=s.core_domains or [],
                     matched_alias=alias.alias_name,

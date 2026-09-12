@@ -122,3 +122,35 @@ async def test_resolve_skills_preserves_custom_skills_without_llm(mock_catalog_s
     # CustomInternalTool is also preserved as custom skill
     assert "CustomInternalTool" in names
     assert names["CustomInternalTool"].is_custom is True
+
+
+@pytest.mark.asyncio
+async def test_normalize_extracted_skills_fuzzy_matching_and_suggestion(mock_catalog_skills):
+    mock_repo = AsyncMock()
+    mock_repo.get_all_skills.return_value = mock_catalog_skills
+    mock_llm = AsyncMock()
+
+    service = SkillCatalogService(mock_repo, mock_llm)
+
+    raw_extracted = [
+        # Typos that should auto-match (ratio >= 0.88)
+        {"name": "Mongo DBB", "category": "technical"},
+        # Related tool name that should suggest canonical (0.78 <= ratio < 0.88)
+        {"name": "FastAPIJS", "category": "technical"},
+    ]
+
+    normalized = await service.normalize_extracted_skills(
+        raw_extracted, existing_skills_cache=mock_catalog_skills
+    )
+
+    norm_map = {item["name"]: item for item in normalized}
+
+    # "Mongo DBB" auto-maps to canonical "MongoDB"
+    assert "MongoDB" in norm_map
+    assert norm_map["MongoDB"]["in_catalog"] is True
+    assert norm_map["MongoDB"]["is_custom"] is False
+
+    # "FastAPIJS" stays as custom but suggests "FastAPI"
+    assert "FastAPIJS" in norm_map
+    assert norm_map["FastAPIJS"]["is_custom"] is True
+    assert norm_map["FastAPIJS"]["suggested_canonical"] == "FastAPI"

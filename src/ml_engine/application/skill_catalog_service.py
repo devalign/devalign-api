@@ -1,5 +1,4 @@
-"""Service for O(1) skill resolution with LLM fallback."""
-
+import difflib
 import json
 import re
 from typing import Any
@@ -8,12 +7,65 @@ from uuid import uuid4
 import structlog
 
 from src.ml_engine.domain.entities import Skill, SkillNature
-from src.ml_engine.domain.ports import LLMService, SkillRepository
+from src.ml_engine.domain.ports import EmbeddingService, LLMService, SkillRepository
 
 logger = structlog.get_logger(__name__)
 
+SINGLE_SLASH_TERMS: set[str] = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
 
-def _match_single_skill(
+
+def build_skill_lookup_indexes(
+    skills: list[Skill],
+) -> tuple[dict[str, Skill], dict[str, Skill]]:
+    """Build fast lookup dictionaries (alias_to_skill, norm_to_skill) for skill resolution.
+
+    Indexes:
+    - Canonical normalized_name (e.g. 'python(programminglanguage)')
+    - Normalized name without punctuation
+    - Base name without parentheses (e.g. 'Python (Programming Language)' -> 'python')
+    - Full canonical name lowercase
+    - All declared aliases (both raw lowercase and punctuation-free)
+    """
+    alias_to_skill: dict[str, Skill] = {}
+    norm_to_skill: dict[str, Skill] = {}
+
+    def _index_one(skill: Skill) -> None:
+        # 1. Canonical normalized_name
+        norm = skill.normalized_name.lower().strip()
+        norm_to_skill[norm] = skill
+        norm_clean = re.sub(r"[^a-z0-9]", "", norm)
+        if norm_clean:
+            norm_to_skill[norm_clean] = skill
+
+        # 2. Canonical display name lowercase
+        name_lower = skill.name.strip().lower()
+        if name_lower:
+            alias_to_skill[name_lower] = skill
+
+        # 3. Base name without parentheses: e.g. "Python (Programming Language)" -> "python"
+        base_name = re.sub(r"\s*\(.*?\)\s*", "", skill.name).strip().lower()
+        if base_name:
+            alias_to_skill[base_name] = skill
+            base_clean = re.sub(r"[^a-z0-9]", "", base_name)
+            if base_clean:
+                norm_to_skill[base_clean] = skill
+
+        # 4. Declared aliases
+        for alias in skill.aliases:
+            alias_clean = alias.strip().lower()
+            if alias_clean:
+                alias_to_skill[alias_clean] = skill
+                alias_norm = re.sub(r"[^a-z0-9]", "", alias_clean)
+                if alias_norm:
+                    norm_to_skill[alias_norm] = skill
+
+    for s in skills:
+        _index_one(s)
+
+    return alias_to_skill, norm_to_skill
+
+
+def match_single_skill(
     raw: str,
     alias_to_skill: dict[str, Skill],
     norm_to_skill: dict[str, Skill],
@@ -23,14 +75,27 @@ def _match_single_skill(
     if not clean:
         return None
 
-    # 1. Exact alias lookup
     lower = clean.lower()
+
+    # Reject obvious hallucinations, empty states, or sentences mistakenly parsed as skills
+    hallucination_phrases = (
+        "no mencionado",
+        "not mentioned",
+        "no especificado",
+        "sin especificar",
+        "none specified",
+        "n/a",
+    )
+    if any(phrase in lower for phrase in hallucination_phrases) or len(clean) > 80:
+        return None
+
+    # 1. Exact alias lookup
     if lower in alias_to_skill:
         return alias_to_skill[lower]
 
     # 2. Normalized name lookup (spaces/dots/hyphens stripped)
-    norm = lower.replace(" ", "").replace(".", "").replace("-", "")
-    if norm in norm_to_skill:
+    norm = re.sub(r"[^a-z0-9]", "", lower)
+    if norm and norm in norm_to_skill:
         return norm_to_skill[norm]
 
     # 3. Check inside parentheses: e.g. "NoSQL (MongoDB)" -> "MongoDB"
@@ -40,8 +105,8 @@ def _match_single_skill(
         inner_lower = inner.lower()
         if inner_lower in alias_to_skill:
             return alias_to_skill[inner_lower]
-        inner_norm = inner_lower.replace(" ", "").replace(".", "").replace("-", "")
-        if inner_norm in norm_to_skill:
+        inner_norm = re.sub(r"[^a-z0-9]", "", inner_lower)
+        if inner_norm and inner_norm in norm_to_skill:
             return norm_to_skill[inner_norm]
 
         # Also check outside parentheses: e.g. "MongoDB (NoSQL)" -> "MongoDB"
@@ -49,25 +114,43 @@ def _match_single_skill(
         outer_lower = outer.lower()
         if outer_lower in alias_to_skill:
             return alias_to_skill[outer_lower]
-        outer_norm = outer_lower.replace(" ", "").replace(".", "").replace("-", "")
-        if outer_norm in norm_to_skill:
+        outer_norm = re.sub(r"[^a-z0-9]", "", outer_lower)
+        if outer_norm and outer_norm in norm_to_skill:
             return norm_to_skill[outer_norm]
 
     # 4. Check stripping common conversational prefixes
-    for prefix in ("framework ", "librería ", "libreria ", "library ", "lenguaje ", "language "):
+    for prefix in (
+        "framework ",
+        "librería ",
+        "libreria ",
+        "library ",
+        "lenguaje ",
+        "language ",
+        "herramienta ",
+        "tool ",
+    ):
         if lower.startswith(prefix):
             stripped = clean[len(prefix) :].strip()
-            res = _match_single_skill(stripped, alias_to_skill, norm_to_skill)
+            res = match_single_skill(stripped, alias_to_skill, norm_to_skill)
             if res:
                 return res
 
     return None
 
 
+_match_single_skill = match_single_skill
+
+
 class SkillCatalogService:
-    def __init__(self, skill_repository: SkillRepository, llm_service: LLMService):
+    def __init__(
+        self,
+        skill_repository: SkillRepository,
+        llm_service: LLMService,
+        embedding_service: EmbeddingService | None = None,
+    ):
         self._skills = skill_repository
         self._llm = llm_service
+        self._embedding = embedding_service
 
     async def normalize_extracted_skills(
         self,
@@ -79,6 +162,7 @@ class SkillCatalogService:
         Updates 'name' to the canonical skill name if matched, retaining 'original_raw_name'.
         Marks 'is_custom': False, 'in_catalog': True for catalog skills,
         and 'is_custom': True, 'in_catalog': False for unrecognized skills.
+        If fuzzy similarity is high (0.78-0.88), provides 'suggested_canonical' for UI chips.
         Deduplicates items by canonical name while merging evidence.
         """
         if not raw_skills:
@@ -89,18 +173,25 @@ class SkillCatalogService:
         else:
             existing_skills = await self._skills.get_all_skills()
 
-        alias_to_skill: dict[str, Skill] = {}
-        norm_to_skill: dict[str, Skill] = {}
-        for skill in existing_skills:
-            norm_to_skill[skill.normalized_name] = skill
-            for alias in skill.aliases:
-                alias_to_skill[alias.lower()] = skill
+        alias_to_skill, norm_to_skill = build_skill_lookup_indexes(existing_skills)
+        all_alias_keys = list(alias_to_skill.keys())
 
-        dedup_map: dict[str, dict[str, Any]] = {}
-
+        expanded_raw: list[dict[str, Any]] = []
         for item in raw_skills:
             if not isinstance(item, dict):
                 continue
+            r_name = str(item.get("name", "")).strip()
+            if "/" in r_name and r_name.lower() not in SINGLE_SLASH_TERMS:
+                parts = [p.strip() for p in r_name.split("/") if p.strip()]
+                for p in parts:
+                    clone = dict(item)
+                    clone["name"] = p
+                    expanded_raw.append(clone)
+            else:
+                expanded_raw.append(item)
+
+        dedup_map: dict[str, dict[str, Any]] = {}
+        for item in expanded_raw:
             raw_name = str(item.get("name", "")).strip()
             if not raw_name:
                 continue
@@ -117,14 +208,47 @@ class SkillCatalogService:
                 processed_item["original_raw_name"] = raw_name
                 processed_item["in_catalog"] = True
                 processed_item["is_custom"] = False
+                processed_item["suggested_canonical"] = None
                 processed_item["category"] = (
                     "concept" if matched.nature == SkillNature.CONCEPT else "technical"
                 )
             else:
-                norm_key = raw_name.lower()
-                processed_item["name"] = raw_name
-                processed_item["in_catalog"] = False
-                processed_item["is_custom"] = True
+                # Fuzzy fallback matching against canonical catalog
+                clean_lower = raw_name.lower()
+                close_matches = difflib.get_close_matches(
+                    clean_lower, all_alias_keys, n=1, cutoff=0.78
+                )
+
+                if close_matches:
+                    best_match_key = close_matches[0]
+                    matched_candidate = alias_to_skill[best_match_key]
+                    ratio = difflib.SequenceMatcher(None, clean_lower, best_match_key).ratio()
+
+                    if ratio >= 0.88:
+                        canonical_name = matched_candidate.name
+                        norm_key = canonical_name.lower()
+                        processed_item["name"] = canonical_name
+                        processed_item["original_raw_name"] = raw_name
+                        processed_item["in_catalog"] = True
+                        processed_item["is_custom"] = False
+                        processed_item["suggested_canonical"] = None
+                        processed_item["category"] = (
+                            "concept"
+                            if matched_candidate.nature == SkillNature.CONCEPT
+                            else "technical"
+                        )
+                    else:
+                        norm_key = raw_name.lower()
+                        processed_item["name"] = raw_name
+                        processed_item["in_catalog"] = False
+                        processed_item["is_custom"] = True
+                        processed_item["suggested_canonical"] = matched_candidate.name
+                else:
+                    norm_key = raw_name.lower()
+                    processed_item["name"] = raw_name
+                    processed_item["in_catalog"] = False
+                    processed_item["is_custom"] = True
+                    processed_item["suggested_canonical"] = None
 
             if norm_key in dedup_map:
                 # Merge evidence
@@ -165,11 +289,16 @@ class SkillCatalogService:
                 redundant DB round-trip. If omitted the catalogue is loaded
                 from the database.
         """
-        # Clean inputs
+        # Clean inputs and split compound terms like "JavaScript/TypeScript"
         clean_strings = []
         for raw_str in raw_strings:
             if isinstance(raw_str, str) and raw_str.strip():
-                clean_strings.append(raw_str.strip())
+                trimmed = raw_str.strip()
+                if "/" in trimmed and trimmed.lower() not in SINGLE_SLASH_TERMS:
+                    parts = [p.strip() for p in trimmed.split("/") if p.strip()]
+                    clean_strings.extend(parts)
+                else:
+                    clean_strings.append(trimmed)
 
         if not clean_strings:
             return []
@@ -181,12 +310,7 @@ class SkillCatalogService:
             existing_skills = await self._skills.get_all_skills()
 
         # Build lookup maps
-        alias_to_skill = {}
-        norm_to_skill = {}
-        for skill in existing_skills:
-            norm_to_skill[skill.normalized_name] = skill
-            for alias in skill.aliases:
-                alias_to_skill[alias.lower()] = skill
+        alias_to_skill, norm_to_skill = build_skill_lookup_indexes(existing_skills)
 
         resolved_skills = []
         unresolved_strings = []

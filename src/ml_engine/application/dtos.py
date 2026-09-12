@@ -37,6 +37,7 @@ class SkillDTO(BaseModel):
     ict_score: float = 0.0
     trend: str | None = None
     is_custom: bool = False
+    suggested_canonical: str | None = None
 
 
 class DomainAffinityDTO(BaseModel):
@@ -157,6 +158,8 @@ class SkillSearchResultDTO(BaseModel):
     id: UUID
     name: str
     skill_type: str = "tech"
+    status: str = "canonical"
+    standard_name: str | None = None
     domain_tags: list[str] = []
     core_domains: list[str] = []
     matched_alias: str | None = None
