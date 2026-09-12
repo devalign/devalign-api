@@ -58,6 +58,7 @@ class JobOfferModel(Base):
     full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     portal: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    country: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     date_posted: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # JSONB staging: raw skill lists from the scraper (e.g. ["python", "docker"])
     raw_hard_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)

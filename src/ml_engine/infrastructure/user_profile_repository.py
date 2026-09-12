@@ -96,6 +96,7 @@ class SQLUserProfileRepository(UserProfileRepository):
                     new_skill_model = SkillModel(
                         skill_id=uuid4(),
                         name=skill.name,
+                        status="pending_review",
                         nature=skill.nature.value if skill.nature else SkillNature.TECH.value,
                         weight=skill.weight,
                         domain_tags=skill.domain_tags or [],
@@ -149,6 +150,7 @@ class SQLUserProfileRepository(UserProfileRepository):
                 new_skill_model = SkillModel(
                     skill_id=uuid4(),
                     name=skill_name,
+                    status="pending_review",
                     nature=SkillNature.TECH.value,
                     weight=1.0,
                     domain_tags=[],

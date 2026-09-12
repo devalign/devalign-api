@@ -427,6 +427,8 @@ async def get_cv_status_by_id(
                         self_taught=self_taught,
                         personal_projects=personal_projects,
                         has_certification=has_certification,
+                        is_custom=bool(s.get("is_custom", False)),
+                        suggested_canonical=s.get("suggested_canonical"),
                         ict_score=_compute_ict(
                             self_taught=self_taught,
                             personal_projects=personal_projects,

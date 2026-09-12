@@ -928,8 +928,17 @@ Examples:
 - "TypeScript/JavaScript (Angular, Vue.js, Nuxt.js)" -> MUST extract: "TypeScript", "JavaScript", "Angular", "Vue.js", "Nuxt.js".
 - "Databases: SQL • NoSQL • RabbitMQ • Apache Kafka" -> MUST extract: "SQL", "NoSQL", "RabbitMQ", "Apache Kafka".
 
+CRITICAL NORMALIZATION RULES FOR SKILL NAMES:
+- NEVER INCLUDE SPECIFIC SOFTWARE VERSION NUMBERS: Standardize to the core technology name.
+  Examples: "Python 3.12" -> "Python", "Java 17" -> "Java", "Angular 14" -> "Angular", "PostgreSQL 15" -> "PostgreSQL", "React 18" -> "React", "Node 20" -> "Node.js", ".NET 8" -> ".NET".
+- NEVER INCLUDE ACTION VERBS OR CONVERSATIONAL PREFIXES: Extract only the pure technology or tool noun.
+  Examples: "Manejo de Git" -> "Git", "Desarrollo con React" -> "React", "Conocimiento en Docker" -> "Docker", "Administración de Linux" -> "Linux".
+- NEVER INCLUDE PROFICIENCY LEVEL ADJECTIVES:
+  Examples: "React avanzado" -> "React", "Senior Java" -> "Java", "Basic SQL" -> "SQL".
+- SPLIT COMPOUND SLASHES: Slashes like "JavaScript/TypeScript" represent two distinct skills. Always extract each individually ("JavaScript", "TypeScript"). Only preserve true single acronyms containing slashes ("CI/CD", "TCP/IP", "I/O", "PL/SQL", "Client/Server").
+
 For each skill, extract:
-- name: the skill name exactly as it appears
+- name: the canonical technology/tool name (strictly applying the normalization rules above: no versions, no prefixes, no qualifiers)
 - category: one of "technical", "tools", or "methodologies"
 - years_of_experience: integer, estimated years the candidate has used this skill based on work experience dates
 - self_taught: boolean, true only if the CV explicitly states this skill was self-taught
@@ -1134,7 +1143,11 @@ class NormalizeSkillsUseCase:
 
         import numpy as np
 
-        from src.ml_engine.domain.entities import Skill, SkillNature
+        from src.ml_engine.application.skill_catalog_service import (
+            build_skill_lookup_indexes,
+            match_single_skill,
+        )
+        from src.ml_engine.domain.entities import Skill, SkillNature, SkillStatus
 
         logger.info("Starting Skill Normalization Pipeline")
 
@@ -1144,30 +1157,50 @@ class NormalizeSkillsUseCase:
             logger.info("No unnormalized offers found.")
             return {"processed_offers": 0, "new_skills": 0}
 
-        # 2. Fetch existing skills from database
+        # 2. Fetch existing skills from database and build indexes
         existing_skills = await self._skills.get_all_skills()
-        skill_map = {s.normalized_name: s for s in existing_skills}
+        alias_to_skill, norm_to_skill = build_skill_lookup_indexes(existing_skills)
+        skill_map: dict[str, Skill] = {s.normalized_name: s for s in existing_skills}
 
         new_skills_to_create: dict[str, Skill] = {}
         processed_offer_ids = []
 
-        # Gather unique skills in this batch that are not exactly matched
+        # Gather unique skills in this batch that are not matched
         unmapped_raw_skills: dict[str, str] = {}  # norm_name -> raw_name
+
+        SINGLE_SLASH_TERMS = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
 
         for offer in offers:
             processed_offer_ids.append(offer["id"])
             raw_skills = offer.get("raw_hard_skills", [])
+            expanded_skills: list[str] = []
+            for rs in raw_skills:
+                if not isinstance(rs, str):
+                    continue
+                c_rs = rs.strip()
+                if "/" in c_rs and c_rs.lower() not in SINGLE_SLASH_TERMS:
+                    expanded_skills.extend(p.strip() for p in c_rs.split("/") if p.strip())
+                else:
+                    expanded_skills.append(c_rs)
 
-            for raw_skill in raw_skills:
-                clean_name = raw_skill.strip()
+            for clean_name in expanded_skills:
                 norm_name = clean_name.lower().replace(" ", "").replace(".", "")
 
                 if not norm_name:
                     continue
 
-                # Exact match check against existing DB or already planned creations
-                if norm_name not in skill_map and norm_name not in new_skills_to_create:
-                    unmapped_raw_skills[norm_name] = clean_name
+                # 1. Exact or already matched check
+                if norm_name in skill_map:
+                    continue
+
+                # 2. Fast catalog & alias resolution (Lightcast canonicals, aliases, parentheses)
+                matched = match_single_skill(clean_name, alias_to_skill, norm_to_skill)
+                if matched:
+                    skill_map[norm_name] = matched
+                    continue
+
+                # 3. Unmapped candidate: queue for semantic / fuzzy resolution
+                unmapped_raw_skills[norm_name] = clean_name
 
         # If there are unmapped skills, generate embeddings in batch
         unmapped_embeddings: dict[str, list[float]] = {}
@@ -1185,155 +1218,97 @@ class NormalizeSkillsUseCase:
 
         # Process matching using embeddings / fuzzy matching
         for norm_name, clean_name in unmapped_raw_skills.items():
-            matched_skill = None
             skill_vector = unmapped_embeddings.get(norm_name)
 
-            # Check if it was mapped in this loop (to avoid duplicate processing within same batch)
-            if norm_name in new_skills_to_create or norm_name in skill_map:
+            if norm_name in skill_map:
                 continue
+
+            # Reject obvious hallucinations, empty states, or sentences mistakenly parsed as skills
+            hallucination_phrases = (
+                "no mencionado",
+                "not mentioned",
+                "no especificado",
+                "sin especificar",
+                "none specified",
+                "n/a",
+            )
+            if any(phrase in clean_name.lower() for phrase in hallucination_phrases) or len(clean_name) > 80:
+                logger.info(f"Skipping hallucinated or invalid skill candidate: '{clean_name}'")
+                continue
+
+            # Semantic Match vs existing canonical skills
+            best_match = None
+            best_score = -1.0
+
+            if skill_vector:
+                for s in existing_skills:
+                    if s.embedding is not None:
+                        a = np.array(skill_vector)
+                        b = np.array(s.embedding)
+                        norm_a = np.linalg.norm(a)
+                        norm_b = np.linalg.norm(b)
+                        if norm_a > 0 and norm_b > 0:
+                            sim = float(np.dot(a, b) / (norm_a * norm_b))
+                            if sim > best_score:
+                                best_score = sim
+                                best_match = s
+
+            # Threshold decision
+            if best_match and best_score >= 0.88:
+                logger.info(
+                    f"Mapped '{clean_name}' semantically to canonical '{best_match.name}' (score: {best_score:.3f})"
+                )
+                skill_map[norm_name] = best_match
             else:
-                # Semantic Match vs existing skills
-                best_match = None
-                best_score = -1.0
-
-                if skill_vector:
-                    # Search best match in existing skills that have embeddings
-                    for s in list(skill_map.values()) + list(new_skills_to_create.values()):
-                        if s.embedding is not None:
-                            # Cosine similarity
-                            a = np.array(skill_vector)
-                            b = np.array(s.embedding)
-                            norm_a = np.linalg.norm(a)
-                            norm_b = np.linalg.norm(b)
-                            if norm_a > 0 and norm_b > 0:
-                                sim = float(np.dot(a, b) / (norm_a * norm_b))
-                                if sim > best_score:
-                                    best_score = sim
-                                    best_match = s
-
-                # Threshold decision
-                if best_match and best_score >= 0.88:
+                # Fallback: Fuzzy matching (difflib) against canonical skill_map
+                all_keys = list(skill_map.keys())
+                matches = difflib.get_close_matches(norm_name, all_keys, n=1, cutoff=0.85)
+                if matches:
+                    matched_skill = skill_map[matches[0]]
                     logger.info(
-                        f"Mapped '{clean_name}' semantically to canonical '{best_match.name}' (score: {best_score:.3f})"
+                        f"Mapped '{clean_name}' via fuzzy matching to canonical '{matched_skill.name}'"
                     )
-                    # Map this alias to existing skill in local map for rest of batch
-                    skill_map[norm_name] = best_match
+                    skill_map[norm_name] = matched_skill
                 else:
-                    # Fallback: Fuzzy matching (difflib)
-                    all_keys = list(skill_map.keys()) + list(new_skills_to_create.keys())
-                    matches = difflib.get_close_matches(norm_name, all_keys, n=1, cutoff=0.85)
-                    if matches:
-                        matched_name = matches[0]
-                        if matched_name in skill_map:
-                            matched_skill = skill_map[matched_name]
-                        else:
-                            matched_skill = new_skills_to_create[matched_name]
-                        logger.info(
-                            f"Mapped '{clean_name}' via fuzzy matching to canonical '{matched_skill.name}'"
-                        )
-                        skill_map[norm_name] = matched_skill
-                    else:
-                        # Create new canonical skill
-                        logger.info(f"Creating new canonical skill: '{clean_name}'")
-                        matched_skill = Skill(
-                            name=clean_name,
-                            nature=SkillNature.TECH,
-                            normalized_name=norm_name,
-                            embedding=skill_vector,
-                        )
-                        new_skills_to_create[norm_name] = matched_skill
-                        skill_map[norm_name] = matched_skill
+                    logger.debug(
+                        f"Quarantined unmapped offer skill candidate: '{clean_name}' (did not match canonical catalog)"
+                    )
 
-        # Re-iterate offers to build final link list
+        # Re-iterate offers to build final link list (deduplicating per job offer)
         final_offer_skills_to_insert = []
+        seen_offer_skill_pairs: set[tuple[Any, str]] = set()
+
         for offer in offers:
             raw_skills = offer.get("raw_hard_skills", [])
-            for raw_skill in raw_skills:
-                clean_name = raw_skill.strip()
+            expanded_skills = []
+            for rs in raw_skills:
+                if not isinstance(rs, str):
+                    continue
+                c_rs = rs.strip()
+                if "/" in c_rs and c_rs.lower() not in SINGLE_SLASH_TERMS:
+                    expanded_skills.extend(p.strip() for p in c_rs.split("/") if p.strip())
+                else:
+                    expanded_skills.append(c_rs)
+
+            for clean_name in expanded_skills:
                 norm_name = clean_name.lower().replace(" ", "").replace(".", "")
                 if norm_name in skill_map:
-                    final_offer_skills_to_insert.append(
-                        {
-                            "job_offer_id": offer["id"],
-                            "skill_norm_name": skill_map[norm_name].normalized_name,
-                            "skill_type": "hard_skill",
-                        }
-                    )
+                    target_skill = skill_map[norm_name]
+                    pair_key = (offer["id"], target_skill.normalized_name)
+                    if pair_key not in seen_offer_skill_pairs:
+                        seen_offer_skill_pairs.add(pair_key)
+                        final_offer_skills_to_insert.append(
+                            {
+                                "job_offer_id": offer["id"],
+                                "skill_id": target_skill.id,
+                                "skill_type": "hard_skill",
+                            }
+                        )
 
-        # 2.5 Classify new skills dynamically using LLM before saving them
-        if new_skills_to_create and self._llm:
-            try:
-                import json
-
-                new_skills_list = list(new_skills_to_create.values())
-                new_names = [s.name for s in new_skills_list]
-
-                logger.info("Classifying new skills dynamically using LLM", count=len(new_names))
-
-                domains = ["Backend", "Frontend", "Mobile", "QA", "DevOps", "Cloud", "Data"]
-                prompt = (
-                    f"You are a technical expert. Classify the following IT skills into one or more of these core domains: {', '.join(domains)}.\n"
-                    "Each skill can belong to multiple domains (e.g. 'AWS' -> ['Cloud', 'DevOps']). If a skill is unrelated, use an empty list [].\n"
-                    "Additionally, generate 2-4 lowercase tag strings (domain_tags) for each skill to help with indexing (e.g. 'PostgreSQL' -> ['database', 'postgresql']).\n"
-                    "Return a JSON object where keys are the skill names (exactly as provided) and values are objects containing 'core_domains' (array) and 'domain_tags' (array).\n"
-                    "Example:\n"
-                    '{"python": {"core_domains": ["Backend"], "domain_tags": ["python", "backend"]}, '
-                    '"aws": {"core_domains": ["Cloud", "DevOps"], "domain_tags": ["cloud", "aws", "infrastructure"]}}\n\n'
-                    f"Skills to classify: {json.dumps(new_names)}"
-                )
-
-                llm_response = await self._llm.generate(prompt)
-                classifications = json.loads(llm_response)
-
-                for norm_name, s in list(new_skills_to_create.items()):
-                    res = classifications.get(s.name) or {}
-                    assigned_domains = res.get("core_domains") or []
-                    assigned_tags = res.get("domain_tags") or []
-
-                    valid_domains = [d for d in assigned_domains if d in domains]
-                    valid_tags = [str(t).lower().strip() for t in assigned_tags]
-
-                    updated_skill = dc_replace(
-                        s, core_domains=valid_domains, domain_tags=valid_tags
-                    )
-                    new_skills_to_create[norm_name] = updated_skill
-                    skill_map[norm_name] = updated_skill
-
-                    logger.info(
-                        "Classified dynamic skill",
-                        skill_name=updated_skill.name,
-                        core_domains=updated_skill.core_domains,
-                        domain_tags=updated_skill.domain_tags,
-                    )
-            except Exception as exc:
-                logger.error("Failed to dynamically classify new skills using LLM", error=str(exc))
-
-        # 3. Save new skills to database
-        if new_skills_to_create:
-            logger.info(f"Creating {len(new_skills_to_create)} new canonical skills in DB.")
-            await self._skills.save_skills(list(new_skills_to_create.values()))
-            all_skills = await self._skills.get_all_skills()
-            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, "id")}
-        else:
-            all_skills = await self._skills.get_all_skills()
-            skill_id_map = {s.normalized_name: s.id for s in all_skills if hasattr(s, "id")}
-
-        # 4. Insert offer_skills relations
-        final_offer_skills = []
-        for os in final_offer_skills_to_insert:
-            skill_id = skill_id_map.get(os["skill_norm_name"])
-            if skill_id:
-                final_offer_skills.append(
-                    {
-                        "job_offer_id": os["job_offer_id"],
-                        "skill_id": skill_id,
-                        "skill_type": os["skill_type"],
-                    }
-                )
-
-        if final_offer_skills:
-            logger.info(f"Saving {len(final_offer_skills)} offer_skills relations.")
-            await self._job_offers.save_offer_skills(final_offer_skills)
+        # 3. Insert offer_skills relations directly with canonical IDs
+        if final_offer_skills_to_insert:
+            logger.info(f"Saving {len(final_offer_skills_to_insert)} offer_skills relations.")
+            await self._job_offers.save_offer_skills(final_offer_skills_to_insert)
 
         # 5. Mark offers as normalized
         if processed_offer_ids:
@@ -1342,8 +1317,8 @@ class NormalizeSkillsUseCase:
 
         return {
             "processed_offers": len(processed_offer_ids),
-            "new_skills": len(new_skills_to_create),
-            "offer_skills_linked": len(final_offer_skills),
+            "new_skills": 0,
+            "offer_skills_linked": len(final_offer_skills_to_insert),
         }
 
 

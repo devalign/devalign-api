@@ -52,6 +52,7 @@ class JobOffer:
     education_level: str = ""
     raw_description: str = ""  # → full_description
     source_url: str = ""
+    country: str | None = None
     date_posted: str = ""  # "Hace 2 días" | "2026-04-30"
     scraped_at: str = ""
 

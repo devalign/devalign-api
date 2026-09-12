@@ -15,7 +15,16 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,11 +44,21 @@ class SkillModel(Base):
     """
 
     __tablename__ = "skills"
-    __table_args__ = (UniqueConstraint("name", name="uq_skills_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_skills_name"),
+        CheckConstraint(
+            "status IN ('canonical', 'pending_review', 'deprecated')",
+            name="chk_skills_status",
+        ),
+    )
 
     skill_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
     # Normalized skill name — lowercase, canonical form (e.g. "react.js", "kubernetes")
     name: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
+    # "canonical" | "pending_review" | "deprecated"
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="canonical", index=True
+    )
     # "concept" | "tech" | "soft"
     nature: Mapped[str | None] = mapped_column(String(50), nullable=True)
     domain_tags: Mapped[list[str]] = mapped_column(JSONB, nullable=False, server_default="[]")

@@ -27,6 +27,14 @@ class SkillNature(StrEnum):
     TECH = "tech"
 
 
+class SkillStatus(StrEnum):
+    """Lifecycle governance status of a skill."""
+
+    CANONICAL = "canonical"
+    PENDING_REVIEW = "pending_review"
+    DEPRECATED = "deprecated"
+
+
 class SkillRelationType(StrEnum):
     """Types of edges in the knowledge graph."""
 
@@ -71,6 +79,7 @@ class Skill:
     frequency: float = 1.0  # Relative frequency in a cluster (if applicable)
     embedding: list[float] | None = None
     id: UUID | None = None
+    status: SkillStatus = SkillStatus.CANONICAL
     # Non-empty only for skills inferred via the knowledge graph.
     # Contains the canonical names of child skills that triggered this inference
     # (e.g. ["PostgreSQL"] when SQL is inferred because the CV mentions PostgreSQL).
