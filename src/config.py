@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     CORS_ORIGINS: str | list[str] = Field(
         default=["http://localhost:3000", "https://devalign.vercel.app"]
     )
+    CORS_ORIGIN_REGEX: str | None = Field(
+        default=r"^https:\/\/(.*-jackaranaram\.vercel\.app|devalign.*\.vercel\.app)$",
+        description="Regex pattern for dynamic allowed origins (e.g. Vercel preview environments)",
+    )
+
+    @field_validator("CORS_ORIGIN_REGEX", mode="before")
+    @classmethod
+    def parse_cors_origin_regex(cls, v: str | None) -> str | None:
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
