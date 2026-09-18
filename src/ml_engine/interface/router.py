@@ -300,14 +300,17 @@ async def search_skills(
     for s in sorted(matched_skills, key=lambda x: score_match(x.name), reverse=True):
         if s.skill_id not in seen_ids:
             seen_ids.add(s.skill_id)
-            std_name = s.standards[0].standard_name if s.standards else None
+            std = s.standards[0] if s.standards else None
             results.append(
                 SkillSearchResultDTO(
                     id=s.skill_id,
                     name=s.name,
                     skill_type=s.nature or "tech",
                     status=s.status,
-                    standard_name=std_name,
+                    standard_name=std.standard_name if std else None,
+                    standard_type=std.standard_type if std else None,
+                    category_name=std.category_name if std else None,
+                    subcategory_name=std.subcategory_name if std else None,
                     domain_tags=s.domain_tags or [],
                     core_domains=s.core_domains or [],
                 )
@@ -318,14 +321,17 @@ async def search_skills(
     ):
         if s.skill_id not in seen_ids:
             seen_ids.add(s.skill_id)
-            std_name = s.standards[0].standard_name if s.standards else None
+            std = s.standards[0] if s.standards else None
             results.append(
                 SkillSearchResultDTO(
                     id=s.skill_id,
                     name=s.name,
                     skill_type=s.nature or "tech",
                     status=s.status,
-                    standard_name=std_name,
+                    standard_name=std.standard_name if std else None,
+                    standard_type=std.standard_type if std else None,
+                    category_name=std.category_name if std else None,
+                    subcategory_name=std.subcategory_name if std else None,
                     domain_tags=s.domain_tags or [],
                     core_domains=s.core_domains or [],
                     matched_alias=alias.alias_name,

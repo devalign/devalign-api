@@ -119,6 +119,9 @@ class SkillStandardModel(Base):
     standard_name: Mapped[str] = mapped_column(String(50), nullable=False)
     standard_uri: Mapped[str] = mapped_column(String(512), nullable=False, unique=True, index=True)
     standard_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    standard_type: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    category_name: Mapped[str | None] = mapped_column(String(150), nullable=True, index=True)
+    subcategory_name: Mapped[str | None] = mapped_column(String(150), nullable=True, index=True)
 
     # Relationships
     skill: Mapped[SkillModel] = relationship("SkillModel", back_populates="standards")

@@ -78,6 +78,30 @@ _CV_SECTION_KEYWORDS: frozenset[str] = frozenset(
 )
 
 
+CONCEPT_PATTERNS: tuple[str, ...] = (
+    "back end",
+    "front end",
+    "full stack",
+    "agile",
+    "configuration management",
+    "software engineering",
+    "software development",
+    "cloud computing",
+    "web development",
+    "object-oriented",
+)
+
+
+def is_concept_skill(skill: Any) -> bool:
+    """Check if a skill is an abstract/umbrella conceptual skill rather than an actionable tool."""
+    if not skill:
+        return False
+    if hasattr(skill, "nature") and skill.nature == SkillNature.CONCEPT:
+        return True
+    s_name = (getattr(skill, "name", "") or "").lower().strip()
+    return any(pat in s_name for pat in CONCEPT_PATTERNS)
+
+
 def _looks_like_a_cv(text: str) -> bool:
     """Quick heuristic: does the text contain CV-like section headers?"""
     text_lower = text.lower()
@@ -590,7 +614,9 @@ class ProfileUserFromCVUseCase:
                 s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
             }
             primary_cluster_tech_skills = [
-                s for s in primary_cluster.centroid_skills if s.nature == SkillNature.TECH
+                s
+                for s in primary_cluster.centroid_skills
+                if s.nature == SkillNature.TECH and not is_concept_skill(s)
             ]
             for skill in primary_cluster_tech_skills:
                 if skill.normalized_name not in user_tech_skills:
@@ -652,9 +678,7 @@ class ProfileUserFromCVUseCase:
                     name=s.name,
                     skill_type=s.nature.value,
                     market_importance="consolidated",
-                    market_demand_percentage=round(s.frequency * 100)
-                    if s.frequency is not None
-                    else 100,
+                    market_demand_percentage=_normalize_demand_percentage(s.frequency),
                     self_taught=s.self_taught,
                     personal_projects=s.personal_projects,
                     years_of_experience=s.years_of_experience,
@@ -670,12 +694,11 @@ class ProfileUserFromCVUseCase:
                     name=g.skill.name,
                     skill_type=g.skill.nature.value,
                     market_importance=g.market_importance,
-                    market_demand_percentage=round(g.skill.frequency * 100)
-                    if g.skill.frequency is not None
-                    else None,
+                    market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
                     trend=determine_trend(g.skill.name),
                 )
                 for g in skill_gaps
+                if not is_concept_skill(g.skill)
             ],
             full_name=diagnosed_profile.full_name,
             current_job_role=diagnosed_profile.current_job_role,
@@ -830,6 +853,17 @@ def determine_trend(name: str) -> str:
     return MOCK_TRENDS.get(norm_name, "stable")
 
 
+def _normalize_demand_percentage(frequency: float | None) -> int:
+    """Normalize skill frequency or importance metric to a sensible market demand percentage (20% - 98%)."""
+    if frequency is None:
+        return 70
+    if 0.0 < frequency <= 1.0:
+        return round(frequency * 100)
+    # If frequency is an importance score (e.g. 1.5 - 3.0)
+    scaled = (frequency / 3.0) * 100
+    return min(98, max(20, round(scaled)))
+
+
 def _cluster_affinity_to_dto(
     affinity: ClusterAffinity,
     is_primary: bool,
@@ -857,9 +891,7 @@ def _cluster_affinity_to_dto(
                     if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
                     else "medium"
                 ),
-                market_demand_percentage=round(s.frequency * 100)
-                if s.frequency is not None
-                else 100,
+                market_demand_percentage=_normalize_demand_percentage(s.frequency),
                 self_taught=user_skills_map[s.normalized_name].self_taught
                 if s.normalized_name in user_skills_map
                 else False,
@@ -884,12 +916,11 @@ def _cluster_affinity_to_dto(
                 name=g.skill.name,
                 skill_type=g.skill.nature.value,
                 market_importance=g.market_importance,
-                market_demand_percentage=round(g.skill.frequency * 100)
-                if g.skill.frequency is not None
-                else None,
+                market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
                 trend=determine_trend(g.skill.name),
             )
             for g in affinity.skill_gaps
+            if not is_concept_skill(g.skill)
         ],
     )
 
@@ -1443,6 +1474,10 @@ def compute_affinities_and_domains(
             if skill.normalized_name in user_all_norms:
                 cluster_detected_skills.append(skill)
             else:
+                # Exclude CONCEPT skills from gap analysis (only recommend concrete technical tools)
+                if is_concept_skill(skill):
+                    continue
+
                 # Apply Mittas temporal trend multiplier to the priority score if available
                 trend_multiplier = 1.0
                 if skill_trends and skill.normalized_name in skill_trends:
@@ -2081,7 +2116,6 @@ class GetClusterDiagnosticUseCase:
         self._clusters = cluster_repository
 
     async def execute(self, user_id: UUID, cluster_name: str) -> DiagnosticDetailDTO | None:
-        from dataclasses import replace
 
         from fastapi import HTTPException
 
@@ -2091,73 +2125,129 @@ class GetClusterDiagnosticUseCase:
                 status_code=404, detail="No profile found. Please upload a CV first."
             )
 
-        # Find if it already exists
-        all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
-        # Clean 'Sin Diagnóstico' out if it was empty
-        all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
-
-        affinity = next(
-            (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()), None
-        )
-
-        if not affinity:
-            # We must compute it on the fly!
-            active_clusters = await self._clusters.get_all_active()
-            requested_cluster = next(
-                (c for c in active_clusters if c.name.lower() == cluster_name.lower()), None
-            )
-            if not requested_cluster:
-                raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
-
-            # Compute
-            _, _, affinities, _ = compute_affinities_and_domains(
-                profile.detected_skills, [requested_cluster]
-            )
-            if not affinities:
-                raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
-
-            new_affinity = affinities[0]
-            new_affinity = ClusterAffinity(
-                cluster_id=new_affinity.cluster_id,
-                cluster_name=new_affinity.cluster_name,
-                affinity_score=new_affinity.affinity_score,
-                is_primary=False,
-                market_insights=new_affinity.market_insights,
-                compatible_roles=new_affinity.compatible_roles,
-                ai_insight=new_affinity.ai_insight,
-                detected_skills=new_affinity.detected_skills,
-                skill_gaps=new_affinity.skill_gaps,
-                job_offer_count=new_affinity.job_offer_count,
-                top_skills=new_affinity.top_skills,
-            )
-
-            # Save
-            existing_secondaries = [
-                a for a in profile.secondary_affinities if a.cluster_name != requested_cluster.name
-            ]
-            updated_secondaries = [*existing_secondaries, new_affinity]
-            updated_profile = replace(profile, secondary_affinities=updated_secondaries)
-            await self._profiles.save(updated_profile)
-
-            # Reload profile
-            profile = await self._profiles.get_by_user_id(user_id)
-            if not profile:
-                raise HTTPException(status_code=500, detail="Profile lost after saving diagnostic.")
-
-            all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
-            affinity = next(
-                (a for a in all_affinities if a.cluster_name.lower() == cluster_name.lower()), None
-            )
-            if not affinity:
-                raise HTTPException(status_code=500, detail="Failed to retrieve computed affinity.")
-
-        # Expose top skills and job offer count
-        # In case we need domain affinities for the radar chart
         active_clusters = await self._clusters.get_all_active()
+        requested_cluster = next(
+            (c for c in active_clusters if c.name.lower() == cluster_name.lower()), None
+        )
+        if not requested_cluster:
+            raise HTTPException(status_code=404, detail=f"Cluster '{cluster_name}' not found.")
+
+        # Compute dynamic affinity and gaps against the requested cluster
+        _, _, affinities, _ = compute_affinities_and_domains(
+            profile.detected_skills, [requested_cluster]
+        )
+        if not affinities:
+            raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
+
+        affinity = affinities[0]
         active_clusters = [c for c in active_clusters if c.centroid_skills]
         domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
 
         user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
+
+        # Compute dynamic financial and opportunity projections based on parametric market percentiles
+        raw_insights = affinity.market_insights or {}
+        avg_usd = float(raw_insights.get("average_salary_usd") or 1800.0)
+        p25_usd = float(raw_insights.get("salary_p25_usd") or (avg_usd * 0.75))
+        p50_usd = float(raw_insights.get("salary_median_usd") or avg_usd)
+        p75_usd = float(raw_insights.get("salary_p75_usd") or (avg_usd * 1.35))
+        total_demand = int(raw_insights.get("total_demand") or affinity.job_offer_count or 100)
+
+        seniority_val = (
+            profile.seniority.value.lower()
+            if hasattr(profile.seniority, "value")
+            else str(profile.seniority).lower()
+        )
+
+        aff_score = float(affinity.affinity_score)
+
+        # Baseline salary is anchored to the candidate's seniority band and their affinity match
+        if "senior" in seniority_val or "staff" in seniority_val:
+            base_min = p50_usd
+            base_target = p75_usd
+            ceiling_target = round(p75_usd * 1.2, 2)
+        elif "junior" in seniority_val:
+            base_min = round(p25_usd * 0.85, 2)
+            base_target = p25_usd
+            ceiling_target = p50_usd
+        else:  # MID
+            base_min = p25_usd
+            base_target = p50_usd
+            ceiling_target = p75_usd
+
+        # Current estimated salary based on current affinity within their seniority range
+        current_estimated_salary_usd = round(
+            base_min + (base_target - base_min) * max(0.15, min(1.0, aff_score)),
+            2,
+        )
+
+        # Target salary when all critical gaps are closed (reaching the next seniority percentile ceiling)
+        projected_salary_usd = round(
+            max(current_estimated_salary_usd * 1.08, ceiling_target),
+            2,
+        )
+
+        total_potential_gain = max(80.0, projected_salary_usd - current_estimated_salary_usd)
+
+        # Distribute the potential gain across the technical gaps proportionally (exclude CONCEPT skills)
+        gap_weights = []
+        for g in affinity.skill_gaps:
+            if is_concept_skill(g.skill):
+                continue
+            imp_w = (
+                3.0
+                if g.market_importance == "critical"
+                else (2.0 if g.market_importance == "high" else 1.0)
+            )
+            norm_freq = float(g.skill.frequency or 1.0)
+            gap_weights.append((g, imp_w * norm_freq))
+
+        total_gap_weight = sum(w for _, w in gap_weights) or 1.0
+
+        gap_impacts_list = []
+        for g, w in gap_weights:
+            share = w / total_gap_weight
+            skill_boost_usd = round(total_potential_gain * share, 2)
+            demand_pct = _normalize_demand_percentage(g.skill.frequency)
+            opp_boost = max(1, round((total_demand - round(total_demand * aff_score)) * share))
+            gap_impacts_list.append(
+                {
+                    "skill_name": g.skill.name,
+                    "skill_type": g.skill.nature.value,
+                    "market_importance": g.market_importance,
+                    "salary_boost_usd": skill_boost_usd,
+                    "salary_boost_pen": round(skill_boost_usd * 3.75, 2),
+                    "opportunity_boost_count": opp_boost,
+                    "market_demand_percentage": demand_pct,
+                }
+            )
+
+        potential_gain_percentage = round(
+            ((projected_salary_usd / max(1.0, current_estimated_salary_usd)) - 1.0) * 100, 1
+        )
+
+        salary_projection_dto = {
+            "current_estimated_salary_usd": current_estimated_salary_usd,
+            "current_estimated_salary_pen": round(current_estimated_salary_usd * 3.75, 2),
+            "projected_salary_usd": projected_salary_usd,
+            "projected_salary_pen": round(projected_salary_usd * 3.75, 2),
+            "potential_gain_percentage": max(0.0, potential_gain_percentage),
+            "cluster_average_usd": avg_usd,
+            "cluster_p75_usd": p75_usd,
+            "salary_p25_usd": p25_usd,
+            "salary_p25_pen": round(p25_usd * 3.75, 2),
+            "salary_median_usd": p50_usd,
+            "salary_median_pen": round(p50_usd * 3.75, 2),
+            "salary_p75_pen": round(p75_usd * 3.75, 2),
+        }
+
+        direct_matches = max(1, round(total_demand * max(0.05, min(1.0, aff_score))))
+        opportunity_projection_dto = {
+            "direct_matches_count": direct_matches,
+            "potential_matches_count": total_demand,
+            "total_cluster_offers": total_demand,
+            "unlock_percentage": round((direct_matches / max(1, total_demand)) * 100, 1),
+        }
 
         return DiagnosticDetailDTO(
             user_id=profile.user_id,
@@ -2172,6 +2262,9 @@ class GetClusterDiagnosticUseCase:
             market_insights=affinity.market_insights,
             compatible_roles=affinity.compatible_roles,
             ai_insight=affinity.ai_insight,
+            salary_projection=salary_projection_dto,
+            opportunity_projection=opportunity_projection_dto,
+            gap_impacts=gap_impacts_list,
             detected_skills=[
                 SkillDTO(
                     name=s.name,
@@ -2183,9 +2276,7 @@ class GetClusterDiagnosticUseCase:
                         if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 1.0
                         else "medium"
                     ),
-                    market_demand_percentage=round(s.frequency * 100)
-                    if s.frequency is not None
-                    else 100,
+                    market_demand_percentage=_normalize_demand_percentage(s.frequency),
                     self_taught=user_skills_map[s.normalized_name].self_taught
                     if s.normalized_name in user_skills_map
                     else False,
@@ -2210,12 +2301,11 @@ class GetClusterDiagnosticUseCase:
                     name=g.skill.name,
                     skill_type=g.skill.nature.value,
                     market_importance=g.market_importance,
-                    market_demand_percentage=round(g.skill.frequency * 100)
-                    if g.skill.frequency is not None
-                    else None,
+                    market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
                     trend=determine_trend(g.skill.name),
                 )
                 for g in affinity.skill_gaps
+                if not is_concept_skill(g.skill)
             ],
             domain_affinities=domain_affinities_dto,
             total_profile_skills=len(profile.detected_skills),

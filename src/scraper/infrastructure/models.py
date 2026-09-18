@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime  # noqa: TC003 — required by SQLAlchemy Mapped[] at runtime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -28,7 +28,9 @@ class JobOfferModel(Base):
     Notes:
         - salary is stored as raw text (e.g. "S/. 3,500", "A convenir", "USD 2,500 - 4,000")
           because the scraper cannot always extract a clean numeric value.
+        - min_salary_usd / max_salary_usd are normalized values in USD computed by the API.
         - experience_years is stored as raw text (e.g. "2 a 4 años de experiencia", "No especificado").
+        - min_experience_years / max_experience_years are normalized numeric bounds.
         - raw_hard_skills / raw_soft_skills are JSONB staging columns. They hold the
           raw list-of-strings extracted by the scraper. The ML engine reads them to
           normalize and populate the offer_skills table.
@@ -52,14 +54,27 @@ class JobOfferModel(Base):
     modality: Mapped[str | None] = mapped_column(String(50), nullable=True)
     # Raw salary text from scraper — "S/. 3,500", "A convenir", "USD 2,500 - 4,000"
     salary: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Structured normalized salary in USD
+    min_salary_usd: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True, index=True)
+    max_salary_usd: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    is_salary_negotiable: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Raw experience text — "2 a 4 años de experiencia", "5+", "No especificado"
     experience_years: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Structured normalized experience years
+    min_experience_years: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    max_experience_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     education_level: Mapped[str | None] = mapped_column(String(100), nullable=True)
     full_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     portal: Mapped[str | None] = mapped_column(String(100), nullable=True)
     country: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
     date_posted: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     # JSONB staging: raw skill lists from the scraper (e.g. ["python", "docker"])
     raw_hard_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     raw_soft_skills: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
@@ -91,7 +106,16 @@ class JobOfferModel(Base):
             experience_years=self.experience_years or "",
             education_level=self.education_level or "",
             source_url=self.source_url,
+            country=self.country,
             date_posted=self.date_posted or "",
+            scraped_at=str(self.scraped_at) if self.scraped_at else "",
+            min_salary_usd=float(self.min_salary_usd) if self.min_salary_usd is not None else None,
+            max_salary_usd=float(self.max_salary_usd) if self.max_salary_usd is not None else None,
+            currency=self.currency,
+            is_salary_negotiable=self.is_salary_negotiable,
+            min_experience_years=self.min_experience_years,
+            max_experience_years=self.max_experience_years,
+            published_at=str(self.published_at) if self.published_at else None,
             hard_skills=self.raw_hard_skills or [],
             soft_skills=self.raw_soft_skills or [],
         )
