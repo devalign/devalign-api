@@ -26,6 +26,36 @@ from src.ml_engine.infrastructure.models import (
 )
 
 
+def _derive_seniority(profile_model: ProfileModel) -> SeniorityLevel:
+    """Derive developer seniority from profile years of experience and job role text."""
+    years_exp = profile_model.years_experience
+    if isinstance(years_exp, (int, float)):
+        if years_exp >= 6:
+            return SeniorityLevel.SENIOR
+        if years_exp >= 3:
+            return SeniorityLevel.MID
+        return SeniorityLevel.JUNIOR
+
+    text = f"{profile_model.current_job_role or ''} {profile_model.cv_raw_text or ''}".lower()
+    if any(
+        k in text
+        for k in (
+            "lead",
+            "principal",
+            "staff",
+            "senior",
+            "sr.",
+            "sr ",
+            "architect",
+            "tech lead",
+        )
+    ):
+        return SeniorityLevel.SENIOR
+    if any(k in text for k in ("mid", "semi-senior", "ssr", "intermediate")):
+        return SeniorityLevel.MID
+    return SeniorityLevel.JUNIOR
+
+
 class SQLUserProfileRepository(UserProfileRepository):
     """SQLAlchemy implementation of UserProfileRepository."""
 
