@@ -164,14 +164,12 @@ def parse_salary(salary_str: str | None, country: str | None = None) -> ParsedSa
         fx_rate = FX_RATES_TO_USD.get(country_code, 1.0)
         detected_currency = "COP" if country_code == "co" else "CLP"
 
-    min_usd = (raw_min * period_multiplier) / fx_rate
-    max_usd = (raw_max * period_multiplier) / fx_rate
+    min_val = (raw_min * period_multiplier) / fx_rate
+    max_val = (raw_max * period_multiplier) / fx_rate
 
     # Filter unreasonable bounds for monthly tech salaries in USD ($150 - $35,000 USD/mo)
-    if min_usd < 150 or min_usd > 35000:
-        min_usd = None
-    if max_usd < 150 or max_usd > 35000:
-        max_usd = None
+    min_usd: float | None = min_val if (150 <= min_val <= 35000) else None
+    max_usd: float | None = max_val if (150 <= max_val <= 35000) else None
 
     if min_usd is None and max_usd is None:
         return ParsedSalary(
