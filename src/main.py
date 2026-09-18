@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "Starting Devalign API",
         env=settings.APP_ENV,
         version=settings.VERSION,
+        llm_provider=settings.LLM_PROVIDER,
+        llm_model=settings.LLM_MODEL,
     )
 
     async def prewarm_cache() -> None:

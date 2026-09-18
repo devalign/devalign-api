@@ -410,7 +410,7 @@ class ProfileUserFromCVUseCase:
         cv_text_char_limit = 6000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=3000)
+        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=5000)
         parsed = _parse_cv_extraction_output(raw_output)
         if not parsed:
             raise ValueError("Empty extraction data parsed")
@@ -1112,7 +1112,7 @@ def _parse_cv_extraction_output(raw_output: str) -> dict[str, Any]:
         end = raw_output.rfind("}") + 1
         if start == -1 or end == 0:
             raise ValueError("No JSON object found in LLM output")
-        parsed = json.loads(raw_output[start:end])
+        parsed = json.loads(raw_output[start:end], strict=False)
         if not isinstance(parsed, dict):
             raise ValueError("Parsed output is not a dictionary")
         return _clean_and_unpack_skills(parsed)
@@ -1592,22 +1592,51 @@ class GetKnowledgeGraphUseCase:
         self,
         skill_repository: SkillRepository,
         profile_repository: UserProfileRepository,
+        cluster_repository: ClusterRepository | None = None,
     ) -> None:
         self._skills = skill_repository
         self._profiles = profile_repository
+        self._clusters = cluster_repository
 
     async def execute(self, user_id: UUID | None = None, cluster_name: str | None = None) -> Any:
         from src.ml_engine.application.dtos import GraphLinkDTO, GraphNodeDTO, GraphResponseDTO
 
         # When the user is authenticated, build a focused graph scoped to their
-        # own detected skills and gaps. This avoids loading the entire skill
-        # catalog (potentially thousands of rows) which causes request timeouts.
-        # The unauthenticated path (global explorer) still loads all skills.
+        # own detected skills, gaps, and top cluster context skills (~60-80 nodes total).
         if user_id:
             return await self._build_user_graph(user_id, cluster_name)
 
-        # --- Unauthenticated / global explorer path (full catalog) ---
-        all_skills = await self._skills.get_all_skills()
+        # --- Unauthenticated / global explorer path ---
+        # Fetch bounded representative skills (top ~60-80 skills max) rather than full catalog
+        selected_skills: list[Skill] = []
+        if self._clusters:
+            all_clusters = await self._clusters.get_all_active()
+            target_cluster = None
+            if cluster_name:
+                for c in all_clusters:
+                    if c.name.lower() == cluster_name.lower():
+                        target_cluster = c
+                        break
+            if target_cluster and target_cluster.centroid_skills:
+                selected_skills = target_cluster.centroid_skills[:60]
+            elif all_clusters:
+                # Take top representative skills across clusters
+                seen_norm: set[str] = set()
+                for c in all_clusters:
+                    for s in c.centroid_skills:
+                        if s.normalized_name not in seen_norm:
+                            seen_norm.add(s.normalized_name)
+                            selected_skills.append(s)
+                            if len(selected_skills) >= 60:
+                                break
+                    if len(selected_skills) >= 60:
+                        break
+
+        if not selected_skills:
+            all_skills = await self._skills.get_all_skills()
+            selected_skills = sorted(
+                all_skills, key=lambda s: getattr(s, "weight", 1.0), reverse=True
+            )[:60]
 
         nodes = [
             GraphNodeDTO(
@@ -1617,25 +1646,55 @@ class GetKnowledgeGraphUseCase:
                 domains=s.domain_tags if hasattr(s, "domain_tags") and s.domain_tags else [],
                 status="neutral",
             )
-            for s in all_skills
+            for s in selected_skills
         ]
 
-        # Build links only from explicit relations (skip O(N²) implicit domain links for global view)
-        skill_by_id = {s.id: s for s in all_skills if s.id}
-        links = []
-        for s in all_skills:
+        seen_links: set[tuple[str, str]] = set()
+        links: list[GraphLinkDTO] = []
+        skill_by_name = {s.normalized_name: s for s in selected_skills}
+
+        for s in selected_skills:
             if hasattr(s, "relations") and s.relations:
                 for rel in s.relations:
-                    target = skill_by_id.get(rel.target_skill_id)
-                    if target:
-                        links.append(
-                            GraphLinkDTO(
-                                source=s.normalized_name,
-                                target=target.normalized_name,
-                                value=2.0,
-                                type=f"explicit_{rel.relation_type}",
+                    target_name = (
+                        rel.target_skill_name.lower().replace(" ", "").replace(".", "")
+                        if rel.target_skill_name
+                        else ""
+                    )
+                    if target_name and target_name in skill_by_name:
+                        edge = tuple(sorted([s.normalized_name, target_name]))
+                        if edge not in seen_links:
+                            seen_links.add(edge)
+                            links.append(
+                                GraphLinkDTO(
+                                    source=s.normalized_name,
+                                    target=target_name,
+                                    value=2.0,
+                                    type=f"explicit_{rel.relation_type.value if hasattr(rel.relation_type, 'value') else rel.relation_type}",
+                                )
                             )
+
+        domain_map: dict[str, list[str]] = {}
+        for s in selected_skills:
+            if hasattr(s, "domain_tags") and s.domain_tags:
+                for d in s.domain_tags:
+                    domain_map.setdefault(d, [])
+                    if s.normalized_name not in domain_map[d]:
+                        domain_map[d].append(s.normalized_name)
+
+        for skill_names in domain_map.values():
+            for i in range(len(skill_names) - 1):
+                edge = tuple(sorted([skill_names[i], skill_names[i + 1]]))
+                if edge not in seen_links:
+                    seen_links.add(edge)
+                    links.append(
+                        GraphLinkDTO(
+                            source=skill_names[i],
+                            target=skill_names[i + 1],
+                            value=0.5,
+                            type="implicit_domain",
                         )
+                    )
 
         return GraphResponseDTO(nodes=nodes, links=links)
 
@@ -1644,11 +1703,8 @@ class GetKnowledgeGraphUseCase:
         user_id: UUID,
         cluster_name: str | None,
     ) -> Any:
-        """Build a knowledge graph scoped to a user's detected skills and skill gaps.
-
-        Fetches only the user's profile data (a tiny, bounded set) rather than
-        the full skill catalog, making this O(1) in catalog size.
-        If cluster_name is provided, scopes the skills to that specific cluster.
+        """Build a knowledge graph scoped to a user's detected skills, skill gaps,
+        and top relevant cluster market context skills (bounded to ~80 nodes total).
         """
         from src.ml_engine.application.dtos import GraphLinkDTO, GraphNodeDTO, GraphResponseDTO
 
@@ -1657,42 +1713,77 @@ class GetKnowledgeGraphUseCase:
         if not profile:
             return GraphResponseDTO(nodes=[], links=[])
 
+        target_affinity = None
         if cluster_name:
-            target_affinity = None
-            if profile.primary_affinity and profile.primary_affinity.cluster_name == cluster_name:
+            if (
+                profile.primary_affinity
+                and profile.primary_affinity.cluster_name.lower() == cluster_name.lower()
+            ):
                 target_affinity = profile.primary_affinity
             else:
                 for a in profile.secondary_affinities:
-                    if a.cluster_name == cluster_name:
+                    if a.cluster_name.lower() == cluster_name.lower():
                         target_affinity = a
                         break
 
-            if target_affinity:
-                acquired = {s.normalized_name: s for s in target_affinity.detected_skills}
-                gaps = {g.skill.normalized_name: g.skill for g in target_affinity.skill_gaps}
-                neutral = {
-                    s.normalized_name: s
-                    for s in profile.detected_skills
-                    if s.normalized_name not in acquired
-                }
-            else:
-                acquired = {s.normalized_name: s for s in profile.detected_skills}
-                gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
-                neutral = {}
+        if not target_affinity and profile.primary_affinity:
+            target_affinity = profile.primary_affinity
+
+        if target_affinity:
+            acquired = {s.normalized_name: s for s in target_affinity.detected_skills}
+            gaps = {g.skill.normalized_name: g.skill for g in target_affinity.skill_gaps}
+            neutral = {
+                s.normalized_name: s
+                for s in profile.detected_skills
+                if s.normalized_name not in acquired
+            }
         else:
             acquired = {s.normalized_name: s for s in profile.detected_skills}
             gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
             neutral = {}
 
-        # Fetch all skills to render as the general market backdrop
-        all_market_skills = await self._skills.get_all_skills()
-        market = {
-            s.normalized_name: s
-            for s in all_market_skills
-            if s.normalized_name not in acquired
-            and s.normalized_name not in gaps
-            and s.normalized_name not in neutral
-        }
+        # Fetch top relevant market skills for cluster context (max 35-40 items)
+        market: dict[str, Skill] = {}
+        if self._clusters:
+            all_clusters = await self._clusters.get_all_active()
+            target_cluster = None
+            resolved_cluster_name = cluster_name or (
+                target_affinity.cluster_name if target_affinity else None
+            )
+            if resolved_cluster_name:
+                for c in all_clusters:
+                    if c.name.lower() == resolved_cluster_name.lower():
+                        target_cluster = c
+                        break
+
+            if target_cluster and target_cluster.centroid_skills:
+                for s in target_cluster.centroid_skills:
+                    if (
+                        s.normalized_name not in acquired
+                        and s.normalized_name not in gaps
+                        and s.normalized_name not in neutral
+                    ):
+                        market[s.normalized_name] = s
+                        if len(market) >= 40:
+                            break
+
+            # If fewer than 25 market skills in target cluster, add top skills from other clusters
+            if len(market) < 25:
+                for c in all_clusters:
+                    if target_cluster and c.id == target_cluster.id:
+                        continue
+                    for s in c.centroid_skills:
+                        if (
+                            s.normalized_name not in acquired
+                            and s.normalized_name not in gaps
+                            and s.normalized_name not in neutral
+                            and s.normalized_name not in market
+                        ):
+                            market[s.normalized_name] = s
+                            if len(market) >= 35:
+                                break
+                    if len(market) >= 35:
+                        break
 
         all_skills_to_render = (
             list(acquired.values())
@@ -1726,7 +1817,33 @@ class GetKnowledgeGraphUseCase:
                 )
             )
 
-        # Build implicit links between skills that share a domain tag
+        seen_links: set[tuple[str, str]] = set()
+        links: list[GraphLinkDTO] = []
+        skill_by_name = {s.normalized_name: s for s in all_skills_to_render}
+
+        # 1. Explicit relations
+        for s in all_skills_to_render:
+            if hasattr(s, "relations") and s.relations:
+                for rel in s.relations:
+                    target_name = (
+                        rel.target_skill_name.lower().replace(" ", "").replace(".", "")
+                        if rel.target_skill_name
+                        else ""
+                    )
+                    if target_name and target_name in skill_by_name:
+                        edge = tuple(sorted([s.normalized_name, target_name]))
+                        if edge not in seen_links:
+                            seen_links.add(edge)
+                            links.append(
+                                GraphLinkDTO(
+                                    source=s.normalized_name,
+                                    target=target_name,
+                                    value=2.0,
+                                    type=f"explicit_{rel.relation_type.value if hasattr(rel.relation_type, 'value') else rel.relation_type}",
+                                )
+                            )
+
+        # 2. Implicit domain connections bounded
         domain_map: dict[str, list[str]] = {}
         for s in all_skills_to_render:
             if hasattr(s, "domain_tags") and s.domain_tags:
@@ -1735,17 +1852,19 @@ class GetKnowledgeGraphUseCase:
                     if s.normalized_name not in domain_map[d]:
                         domain_map[d].append(s.normalized_name)
 
-        links = []
         for skill_names in domain_map.values():
             for i in range(len(skill_names) - 1):
-                links.append(
-                    GraphLinkDTO(
-                        source=skill_names[i],
-                        target=skill_names[i + 1],
-                        value=0.5,
-                        type="implicit_domain",
+                edge = tuple(sorted([skill_names[i], skill_names[i + 1]]))
+                if edge not in seen_links:
+                    seen_links.add(edge)
+                    links.append(
+                        GraphLinkDTO(
+                            source=skill_names[i],
+                            target=skill_names[i + 1],
+                            value=0.5,
+                            type="implicit_domain",
+                        )
                     )
-                )
 
         return GraphResponseDTO(nodes=nodes, links=links)
 
@@ -2037,6 +2156,7 @@ class GetMyProfileUseCase:
             work_experience=profile.work_experience,
             education=profile.education,
             certifications=profile.certifications,
+            last_analysis_date=profile.last_analysis_date,
             is_diagnosed=profile.is_diagnosed,
             message="Profile retrieved successfully",
         )

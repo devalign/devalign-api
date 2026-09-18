@@ -231,11 +231,13 @@ async def get_skills_graph(
     and implicit domain connections. If authenticated, highlights user's acquired skills and gaps.
     """
     from src.ml_engine.application.use_cases import GetKnowledgeGraphUseCase
+    from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
     from src.ml_engine.infrastructure.skill_repository import SQLSkillRepository
 
     use_case = GetKnowledgeGraphUseCase(
         skill_repository=SQLSkillRepository(session),
         profile_repository=SQLUserProfileRepository(session),
+        cluster_repository=SQLClusterRepository(session),
     )
 
     uid = UUID(current_user_id) if current_user_id else None
