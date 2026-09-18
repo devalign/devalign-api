@@ -272,7 +272,7 @@ async def run_profile_analysis_task(
             )
     except Exception as exc:
         is_rate_limit = isinstance(exc, RateLimitError)
-        error_msg = str(exc) if is_rate_limit else None
+        error_msg = str(exc)
         bg_logger.exception(
             "CV analysis background task failed",
             user_id=str(user_id),

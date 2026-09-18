@@ -64,6 +64,43 @@ def test_clean_and_unpack_skills_parentheses():
     assert "Docker" in names
 
 
+def test_clean_and_unpack_skills_string_list():
+    """Verify that skills provided as a streamlined string array are correctly parsed and unpacked."""
+    raw_payload = {
+        "years_experience": 4,
+        "skills": [
+            "Python",
+            "FastAPI",
+            "CI/CD (Bitbucket, Jenkins, GitHub Actions)",
+            "AWS (Lambda, S3)",
+            "TypeScript/JavaScript",
+            "Docker",
+        ],
+    }
+
+    result = _clean_and_unpack_skills(raw_payload)
+    names = [s["name"] for s in result["skills"]]
+
+    assert "Python" in names
+    assert "FastAPI" in names
+    assert "CI/CD" in names
+    assert "Bitbucket" in names
+    assert "Jenkins" in names
+    assert "GitHub Actions" in names
+    assert "AWS" in names
+    assert "AWS Lambda" in names
+    assert "AWS S3" in names
+    assert "TypeScript" in names
+    assert "JavaScript" in names
+    assert "Docker" in names
+
+    for item in result["skills"]:
+        assert item["years_of_experience"] == 4
+        assert item["category"] == "technical"
+        assert item["self_taught"] is False
+
+
+
 def test_cluster_affinity_to_dto_mapping():
     """Verify ClusterAffinity converts to ClusterAffinityDTO with detected skills and gaps."""
     cluster_id = uuid4()
