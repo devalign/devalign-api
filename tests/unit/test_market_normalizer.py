@@ -1,9 +1,9 @@
-﻿from datetime import datetime, timezone
-import pytest
+from datetime import UTC, datetime
+
 from src.scraper.application.market_normalizer import (
-    parse_salary,
-    parse_relative_date,
     parse_experience_years,
+    parse_relative_date,
+    parse_salary,
 )
 
 
@@ -39,8 +39,8 @@ def test_parse_salary_cop():
 
 
 def test_parse_relative_date():
-    ref = datetime(2026, 9, 17, 12, 0, 0, tzinfo=timezone.utc)
-    
+    ref = datetime(2026, 9, 17, 12, 0, 0, tzinfo=UTC)
+
     # ISO
     res_iso = parse_relative_date("2026-09-10", ref)
     assert res_iso.year == 2026 and res_iso.month == 9 and res_iso.day == 10

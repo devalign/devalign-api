@@ -1,4 +1,4 @@
-﻿"""Market data normalization module.
+"""Market data normalization module.
 
 Provides pure functions to normalize:
 - Salaries from multi-country currencies (PE, CO, MX, CL, AR, USD, EUR) to standard monthly USD.
@@ -9,17 +9,16 @@ Provides pure functions to normalize:
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import NamedTuple
-
 
 # Approximate FX rates to 1 USD
 FX_RATES_TO_USD: dict[str, float] = {
-    "pe": 3.75,     # PEN (S/.)
-    "co": 4000.0,   # COP ($)
-    "mx": 18.0,     # MXN ($)
-    "cl": 950.0,    # CLP ($)
-    "ar": 1100.0,   # ARS ($)
+    "pe": 3.75,  # PEN (S/.)
+    "co": 4000.0,  # COP ($)
+    "mx": 18.0,  # MXN ($)
+    "cl": 950.0,  # CLP ($)
+    "ar": 1100.0,  # ARS ($)
     "usd": 1.0,
     "eur": 0.92,
 }
@@ -55,15 +54,21 @@ class ParsedExperience(NamedTuple):
 def parse_salary(salary_str: str | None, country: str | None = None) -> ParsedSalary:
     """Normalizes raw salary text into USD monthly bounds."""
     if not salary_str or not isinstance(salary_str, str):
-        return ParsedSalary(min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True)
+        return ParsedSalary(
+            min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True
+        )
 
     text = salary_str.strip().lower()
     if not text:
-        return ParsedSalary(min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True)
+        return ParsedSalary(
+            min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True
+        )
 
     # Check for negotiable keywords
     if any(kw in text for kw in NEGOTIABLE_KEYWORDS):
-        return ParsedSalary(min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True)
+        return ParsedSalary(
+            min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True
+        )
 
     # Determine currency
     country_code = (country or "").strip().lower()
@@ -136,7 +141,9 @@ def parse_salary(salary_str: str | None, country: str | None = None) -> ParsedSa
             continue
 
     if not numbers:
-        return ParsedSalary(min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True)
+        return ParsedSalary(
+            min_salary_usd=None, max_salary_usd=None, currency=None, is_negotiable=True
+        )
 
     # Detect periodicity
     is_annual = "anual" in text or "año" in text or "yr" in text or "year" in text
@@ -167,7 +174,9 @@ def parse_salary(salary_str: str | None, country: str | None = None) -> ParsedSa
         max_usd = None
 
     if min_usd is None and max_usd is None:
-        return ParsedSalary(min_salary_usd=None, max_salary_usd=None, currency=detected_currency, is_negotiable=True)
+        return ParsedSalary(
+            min_salary_usd=None, max_salary_usd=None, currency=detected_currency, is_negotiable=True
+        )
 
     return ParsedSalary(
         min_salary_usd=round(min_usd, 2) if min_usd is not None else None,
@@ -177,14 +186,16 @@ def parse_salary(salary_str: str | None, country: str | None = None) -> ParsedSa
     )
 
 
-def parse_relative_date(date_str: str | None, scraped_at: datetime | None = None) -> datetime | None:
+def parse_relative_date(
+    date_str: str | None, scraped_at: datetime | None = None
+) -> datetime | None:
     """Parses relative and absolute date strings anchored to scraped_at."""
     if not date_str or not isinstance(date_str, str):
         return scraped_at
 
-    ref = scraped_at or datetime.now(timezone.utc)
+    ref = scraped_at or datetime.now(UTC)
     if ref.tzinfo is None:
-        ref = ref.replace(tzinfo=timezone.utc)
+        ref = ref.replace(tzinfo=UTC)
 
     s = date_str.strip().lower()
     if not s:
@@ -195,7 +206,7 @@ def parse_relative_date(date_str: str | None, scraped_at: datetime | None = None
     if iso_match:
         try:
             year, month, day = map(int, iso_match.groups())
-            return datetime(year, month, day, 12, 0, 0, tzinfo=timezone.utc)
+            return datetime(year, month, day, 12, 0, 0, tzinfo=UTC)
         except ValueError:
             pass
 
@@ -240,7 +251,12 @@ def parse_experience_years(exp_str: str | None) -> ParsedExperience:
     if not text or "no especific" in text or "a convenir" in text:
         return ParsedExperience(min_years=None, max_years=None)
 
-    if "sin experiencia" in text or "no requerid" in text or "primer empleo" in text or "0 año" in text:
+    if (
+        "sin experiencia" in text
+        or "no requerid" in text
+        or "primer empleo" in text
+        or "0 año" in text
+    ):
         return ParsedExperience(min_years=0, max_years=0)
 
     # Range: "2 a 4 años", "2 - 5 años", "de 1 a 3 años"

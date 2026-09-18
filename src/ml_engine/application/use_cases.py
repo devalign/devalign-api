@@ -614,7 +614,9 @@ class ProfileUserFromCVUseCase:
                 s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
             }
             primary_cluster_tech_skills = [
-                s for s in primary_cluster.centroid_skills if s.nature == SkillNature.TECH and not is_concept_skill(s)
+                s
+                for s in primary_cluster.centroid_skills
+                if s.nature == SkillNature.TECH and not is_concept_skill(s)
             ]
             for skill in primary_cluster_tech_skills:
                 if skill.normalized_name not in user_tech_skills:
@@ -856,10 +858,10 @@ def _normalize_demand_percentage(frequency: float | None) -> int:
     if frequency is None:
         return 70
     if 0.0 < frequency <= 1.0:
-        return int(round(frequency * 100))
+        return round(frequency * 100)
     # If frequency is an importance score (e.g. 1.5 - 3.0)
     scaled = (frequency / 3.0) * 100
-    return int(min(98, max(20, round(scaled))))
+    return min(98, max(20, round(scaled)))
 
 
 def _cluster_affinity_to_dto(
@@ -2114,7 +2116,6 @@ class GetClusterDiagnosticUseCase:
         self._clusters = cluster_repository
 
     async def execute(self, user_id: UUID, cluster_name: str) -> DiagnosticDetailDTO | None:
-        from dataclasses import replace
 
         from fastapi import HTTPException
 
@@ -2193,7 +2194,11 @@ class GetClusterDiagnosticUseCase:
         for g in affinity.skill_gaps:
             if is_concept_skill(g.skill):
                 continue
-            imp_w = 3.0 if g.market_importance == "critical" else (2.0 if g.market_importance == "high" else 1.0)
+            imp_w = (
+                3.0
+                if g.market_importance == "critical"
+                else (2.0 if g.market_importance == "high" else 1.0)
+            )
             norm_freq = float(g.skill.frequency or 1.0)
             gap_weights.append((g, imp_w * norm_freq))
 
@@ -2204,7 +2209,7 @@ class GetClusterDiagnosticUseCase:
             share = w / total_gap_weight
             skill_boost_usd = round(total_potential_gain * share, 2)
             demand_pct = _normalize_demand_percentage(g.skill.frequency)
-            opp_boost = max(1, int(round((total_demand - int(round(total_demand * aff_score))) * share)))
+            opp_boost = max(1, round((total_demand - round(total_demand * aff_score)) * share))
             gap_impacts_list.append(
                 {
                     "skill_name": g.skill.name,
@@ -2236,7 +2241,7 @@ class GetClusterDiagnosticUseCase:
             "salary_p75_pen": round(p75_usd * 3.75, 2),
         }
 
-        direct_matches = max(1, int(round(total_demand * max(0.05, min(1.0, aff_score)))))
+        direct_matches = max(1, round(total_demand * max(0.05, min(1.0, aff_score))))
         opportunity_projection_dto = {
             "direct_matches_count": direct_matches,
             "potential_matches_count": total_demand,

@@ -55,9 +55,7 @@ class JobOfferModel(Base):
     # Raw salary text from scraper — "S/. 3,500", "A convenir", "USD 2,500 - 4,000"
     salary: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Structured normalized salary in USD
-    min_salary_usd: Mapped[float | None] = mapped_column(
-        Numeric(10, 2), nullable=True, index=True
-    )
+    min_salary_usd: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True, index=True)
     max_salary_usd: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True)
     currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
     is_salary_negotiable: Mapped[bool] = mapped_column(
