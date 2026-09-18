@@ -218,18 +218,25 @@ class SQLUserProfileRepository(UserProfileRepository):
         for psm in skill_res.scalars().all():
             if not psm.skill:
                 continue
+            nature = (
+                SkillNature(psm.skill.nature)
+                if psm.skill.nature
+                else SkillNature.TECH
+            )
             skill_entity = Skill(
                 id=psm.skill.skill_id,
                 name=psm.skill.name,
-                nature=SkillNature(psm.skill.nature) if psm.skill.nature else SkillNature.TECH,
+                nature=nature,
                 normalized_name=psm.skill.name.lower().replace(" ", "").replace(".", ""),
                 weight=float(psm.skill.weight),
                 frequency=1.0,
                 domain_tags=psm.skill.domain_tags or [],
                 core_domains=psm.skill.core_domains or [],
-                market_importance="consolidated",
-                ict_score=float(psm.ict_score) if psm.ict_score is not None else None,
-                skill_type=psm.skill_type or "tech",
+                self_taught=bool(psm.self_taught),
+                personal_projects=bool(psm.personal_projects),
+                years_of_experience=int(psm.years_of_experience or 0),
+                has_certification=bool(psm.has_certification),
+                ict_score=float(psm.ict_score) if psm.ict_score is not None else 0.0,
             )
             global_detected_skills.append(skill_entity)
 
