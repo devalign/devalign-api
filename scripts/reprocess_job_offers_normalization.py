@@ -1,8 +1,9 @@
-"""Reprocess and normalize all job offers in the database.
+﻿"""Reprocess and normalize all job offers in the database.
 
 Matches raw_hard_skills against the canonical skills catalog (Lightcast + curated Custom),
 expands slash-separated compounds, creates offer_skills relations,
-assigns best-matching cluster_id, and sets is_normalized = True.
+assigns best-matching cluster_id, normalizes market fields (salary, experience, date),
+and sets is_normalized = True.
 """
 
 import asyncio
@@ -20,6 +21,11 @@ from src.ml_engine.infrastructure.models import (
     ClusterSkillModel,
     SkillAliasModel,
     SkillModel,
+)
+from src.scraper.application.market_normalizer import (
+    parse_experience_years,
+    parse_relative_date,
+    parse_salary,
 )
 from src.scraper.infrastructure.models import JobOfferModel, OfferSkillModel
 from src.shared.database import AsyncSessionLocal
@@ -112,6 +118,11 @@ async def main():
             JobOfferModel.job_title,
             JobOfferModel.raw_hard_skills,
             JobOfferModel.cluster_id,
+            JobOfferModel.salary,
+            JobOfferModel.country,
+            JobOfferModel.experience_years,
+            JobOfferModel.date_posted,
+            JobOfferModel.scraped_at,
         )
         offers_res = await session.execute(offers_query)
         all_offers = offers_res.all()
@@ -125,11 +136,13 @@ async def main():
         logger.info("Cleared offer_skills table.")
 
         # 5. Process all offers in memory
-        logger.info("Processing offers in memory...")
+        logger.info("Processing offers and market data in memory...")
         all_offer_skills_to_insert = []
-        cluster_to_offer_ids: dict[UUID | None, list[UUID]] = defaultdict(list)
+        offers_update_payload = []
         offers_with_skills = 0
         offers_assigned_cluster = 0
+        offers_with_salary = 0
+        offers_with_exp = 0
         cluster_assignment_counts: dict[UUID, int] = {c_id: 0 for c_id in clusters}
 
         for offer in all_offers:
@@ -191,7 +204,30 @@ async def main():
                 best_cluster_id = offer.cluster_id
                 cluster_assignment_counts[best_cluster_id] += 1
 
-            cluster_to_offer_ids[best_cluster_id].append(o_id)
+            # Market data parsing
+            parsed_sal = parse_salary(offer.salary, offer.country)
+            parsed_exp = parse_experience_years(offer.experience_years)
+            pub_at = parse_relative_date(offer.date_posted, offer.scraped_at)
+
+            if parsed_sal.min_salary_usd is not None or parsed_sal.max_salary_usd is not None:
+                offers_with_salary += 1
+            if parsed_exp.min_years is not None:
+                offers_with_exp += 1
+
+            offers_update_payload.append(
+                {
+                    "job_offer_id": o_id,
+                    "cluster_id": best_cluster_id,
+                    "min_salary_usd": parsed_sal.min_salary_usd,
+                    "max_salary_usd": parsed_sal.max_salary_usd,
+                    "currency": parsed_sal.currency,
+                    "is_salary_negotiable": parsed_sal.is_negotiable,
+                    "min_experience_years": parsed_exp.min_years,
+                    "max_experience_years": parsed_exp.max_years,
+                    "published_at": pub_at,
+                    "is_normalized": True,
+                }
+            )
 
         # 6. Bulk insert offer_skills in chunks
         chunk_size = 2500
@@ -204,21 +240,17 @@ async def main():
 
         await session.commit()
 
-        # 7. Bulk update job_offers grouped by assigned cluster (at most 37 queries)
-        logger.info(f"Updating job_offers table across {len(cluster_to_offer_ids)} cluster groups...")
-        for c_id, o_ids in cluster_to_offer_ids.items():
-            # Process in sub-batches of 1000 IDs to avoid query param overflow
-            sub_batch_size = 1000
-            for j in range(0, len(o_ids), sub_batch_size):
-                sub_ids = o_ids[j : j + sub_batch_size]
-                await session.execute(
-                    update(JobOfferModel)
-                    .where(JobOfferModel.job_offer_id.in_(sub_ids))
-                    .values(
-                        cluster_id=c_id,
-                        is_normalized=True,
-                    )
-                )
+        # 7. High performance bulk update of job_offers using temporary staging or parameter batches
+        update_chunk_size = 1000
+        total_updates = len(offers_update_payload)
+        logger.info(f"Bulk updating {total_updates} job_offers...")
+        for i in range(0, total_updates, update_chunk_size):
+            chunk = offers_update_payload[i : i + update_chunk_size]
+            await session.execute(
+                update(JobOfferModel),
+                chunk
+            )
+            logger.info(f"Updated job_offers: {min(i + update_chunk_size, total_updates)}/{total_updates}")
         await session.commit()
 
         # 8. Update clusters.job_offer_count with new counts
@@ -238,6 +270,12 @@ async def main():
         )
         logger.info(
             f"Offers assigned to clusters: {offers_assigned_cluster} ({offers_assigned_cluster/total_offers*100:.1f}%)"
+        )
+        logger.info(
+            f"Offers with parsed salary: {offers_with_salary} ({offers_with_salary/total_offers*100:.1f}%)"
+        )
+        logger.info(
+            f"Offers with parsed experience: {offers_with_exp} ({offers_with_exp/total_offers*100:.1f}%)"
         )
         logger.info(f"Total offer_skills links created: {total_links}")
 

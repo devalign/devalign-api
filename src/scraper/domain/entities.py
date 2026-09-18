@@ -56,6 +56,15 @@ class JobOffer:
     date_posted: str = ""  # "Hace 2 días" | "2026-04-30"
     scraped_at: str = ""
 
+    # Structured market fields (computed during normalization)
+    min_salary_usd: float | None = None
+    max_salary_usd: float | None = None
+    currency: str | None = None
+    is_salary_negotiable: bool = False
+    min_experience_years: int | None = None
+    max_experience_years: int | None = None
+    published_at: str | None = None
+
     # Staging skill arrays — stored as JSONB in job_offers
     # ML Engine normalizes these into the skills + offer_skills tables
     hard_skills: list[str] = field(default_factory=list)  # → raw_hard_skills
