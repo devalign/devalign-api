@@ -101,6 +101,9 @@ class DiagnosticDetailDTO(BaseModel):
     market_insights: dict[str, Any] | None = None
     compatible_roles: list[dict[str, Any]] | None = None
     ai_insight: str | None = None
+    salary_projection: dict[str, Any] | None = None
+    opportunity_projection: dict[str, Any] | None = None
+    gap_impacts: list[dict[str, Any]] = []
     detected_skills: list[SkillDTO] = []
     skill_gaps: list[SkillDTO] = []
     domain_affinities: list[DomainAffinityDTO] = []
@@ -160,6 +163,9 @@ class SkillSearchResultDTO(BaseModel):
     skill_type: str = "tech"
     status: str = "canonical"
     standard_name: str | None = None
+    standard_type: str | None = None
+    category_name: str | None = None
+    subcategory_name: str | None = None
     domain_tags: list[str] = []
     core_domains: list[str] = []
     matched_alias: str | None = None

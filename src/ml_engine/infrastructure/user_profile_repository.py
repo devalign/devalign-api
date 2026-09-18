@@ -307,6 +307,8 @@ class SQLUserProfileRepository(UserProfileRepository):
                 if ds.skill_status == "consolidated":
                     detected_skills.append(skill_entity)
                 elif ds.skill_status == "gap":
+                    if skill_entity.nature == SkillNature.CONCEPT:
+                        continue
                     priority = skill_entity.weight * skill_entity.frequency
                     if priority >= 2.0:
                         importance = "critical"
