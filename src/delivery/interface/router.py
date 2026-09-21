@@ -149,6 +149,61 @@ async def update_my_profile(
     return dto
 
 
+@router.put(
+    "/skills", response_model=MLUserProfileDTO, summary="Update user profile skills and evidence"
+)
+async def update_my_skills(
+    current_user_id: CurrentUserIdDep,
+    session: SessionDep,
+    data: dict[str, list[dict[str, Any]]],
+) -> MLUserProfileDTO:
+    """
+    Update skills list, years of experience, self-taught, certification, and recalculate ICT scores.
+    """
+    from dataclasses import replace
+    from src.ml_engine.domain.entities import Skill
+    from src.ml_engine.application.use_cases import _nature_from_category
+
+    repo = SQLUserProfileRepository(session)
+    profile = await repo.get_by_user_id(UUID(current_user_id))
+    if not profile:
+        raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
+
+    raw_skills = data.get("skills", [])
+    updated_skill_objects = []
+    for s in raw_skills:
+        if isinstance(s, dict) and "name" in s:
+            years_exp = int(s.get("years_of_experience", 0) or 0)
+            self_taught = bool(s.get("self_taught", False))
+            personal_projects = bool(s.get("personal_projects", False))
+            has_cert = bool(s.get("has_certification", False))
+            nature_val = s.get("skill_type") or s.get("nature") or "technical"
+            
+            skill_obj = Skill(
+                name=s["name"],
+                nature=_nature_from_category(str(nature_val)),
+                normalized_name=s["name"].lower().replace(" ", "").replace(".", ""),
+                self_taught=self_taught,
+                personal_projects=personal_projects,
+                years_of_experience=years_exp,
+                has_certification=has_cert,
+                is_custom=bool(s.get("is_custom", False)),
+            )
+            ict = float(s.get("ict_score") or skill_obj.calculate_ict(profile.seniority))
+            skill_obj = replace(skill_obj, ict_score=ict)
+            updated_skill_objects.append(skill_obj)
+
+    updated_profile = replace(profile, detected_skills=updated_skill_objects)
+    await repo.save(updated_profile)
+
+    cluster_repo = SQLClusterRepository(session)
+    dto = await GetMyProfileUseCase(repo, cluster_repo).execute(UUID(current_user_id))
+    if not dto:
+        raise HTTPException(status_code=404, detail="Profile not found after skill update")
+    return dto
+
+
+
 @router.post("/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document")
 async def upload_cv(
     current_user_id: CurrentUserIdDep,
