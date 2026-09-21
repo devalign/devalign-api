@@ -327,17 +327,28 @@ async def run_profile_analysis_task(
             )
     except Exception as exc:
         is_rate_limit = isinstance(exc, RateLimitError)
-        error_msg = str(exc)
+        raw_error = str(exc)
         bg_logger.exception(
             "CV analysis background task failed",
             user_id=str(user_id),
             cv_id=str(cv_id),
-            error=str(exc),
+            error=raw_error,
             is_rate_limit=is_rate_limit,
         )
 
+        # Produce a user-friendly error message for the frontend
+        if "404" in raw_error or "not found" in raw_error.lower() or "llm" in raw_error.lower():
+            error_msg = "El servicio de análisis con IA no está disponible temporalmente. Por favor, intenta de nuevo."
+        elif is_rate_limit or "rate limit" in raw_error.lower():
+            error_msg = "Se ha alcanzado el límite de solicitudes de IA. Por favor, espera un momento e intenta de nuevo."
+        elif "not appear to be a professional cv" in raw_error.lower():
+            error_msg = "El documento no parece ser un currículum profesional válido. Asegúrate de incluir experiencia y habilidades técnicas."
+        else:
+            error_msg = "Ocurrió un error al procesar el CV. Por favor, intenta subirlo nuevamente."
+
         # Retry setting status to "failed" up to 3 times
         last_db_exc: Exception | None = None
+
         for attempt in range(3):
             try:
                 async with AsyncSessionLocal() as fail_session:
