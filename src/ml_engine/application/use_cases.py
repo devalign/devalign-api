@@ -1592,7 +1592,8 @@ class GetKnowledgeGraphUseCase:
                         else ""
                     )
                     if target_name and target_name in skill_by_name:
-                        edge = tuple(sorted([s.normalized_name, target_name]))
+                        u, v = s.normalized_name, target_name
+                        edge: tuple[str, str] = (u, v) if u < v else (v, u)
                         if edge not in seen_links:
                             seen_links.add(edge)
                             links.append(
@@ -1614,7 +1615,8 @@ class GetKnowledgeGraphUseCase:
 
         for skill_names in domain_map.values():
             for i in range(len(skill_names) - 1):
-                edge = tuple(sorted([skill_names[i], skill_names[i + 1]]))
+                u, v = skill_names[i], skill_names[i + 1]
+                edge = (u, v) if u < v else (v, u)
                 if edge not in seen_links:
                     seen_links.add(edge)
                     links.append(
@@ -1761,7 +1763,8 @@ class GetKnowledgeGraphUseCase:
                         else ""
                     )
                     if target_name and target_name in skill_by_name:
-                        edge = tuple(sorted([s.normalized_name, target_name]))
+                        u, v = s.normalized_name, target_name
+                        edge: tuple[str, str] = (u, v) if u < v else (v, u)
                         if edge not in seen_links:
                             seen_links.add(edge)
                             links.append(
@@ -1784,7 +1787,8 @@ class GetKnowledgeGraphUseCase:
 
         for skill_names in domain_map.values():
             for i in range(len(skill_names) - 1):
-                edge = tuple(sorted([skill_names[i], skill_names[i + 1]]))
+                u, v = skill_names[i], skill_names[i + 1]
+                edge = (u, v) if u < v else (v, u)
                 if edge not in seen_links:
                     seen_links.add(edge)
                     links.append(
