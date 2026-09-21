@@ -14,7 +14,7 @@ from src.ml_engine.infrastructure.models import ClusterModel, ClusterSkillModel
 # Module-level cache for active tech clusters
 _CLUSTERS_CACHE: list[TechCluster] | None = None
 _CACHE_EXPIRY: datetime | None = None
-CACHE_TTL_SECONDS = 600  # 10 minutes
+CACHE_TTL_SECONDS = 30  # 30 seconds to allow fast sync after redeployments
 
 
 class SQLClusterRepository(ClusterRepository):

@@ -179,6 +179,7 @@ class ProfileUserFromCVUseCase:
         raw_skills: list[dict[str, Any]] | dict[str, list[str]] | Any,
         use_llm_fallback: bool = True,
         existing_skills_cache: list[Skill] | None = None,
+        seniority: SeniorityLevel | None = None,
     ) -> list[Skill]:
         # Handle the list of dicts structure (new LLM format)
         skill_evidence_map = {}
@@ -239,10 +240,12 @@ class ProfileUserFromCVUseCase:
                     has_certification=has_cert,
                     is_custom=is_custom,
                 )
-                stamped_skill = dc_replace(stamped_skill, ict_score=stamped_skill.calculate_ict())
+                stamped_skill = dc_replace(
+                    stamped_skill, ict_score=stamped_skill.calculate_ict(seniority)
+                )
                 decorated_skills.append(stamped_skill)
             else:
-                decorated_skills.append(skill)
+                decorated_skills.append(dc_replace(skill, ict_score=skill.calculate_ict(seniority)))
 
         return decorated_skills
 
@@ -534,6 +537,7 @@ class ProfileUserFromCVUseCase:
             raw_skills,
             use_llm_fallback=False,
             existing_skills_cache=all_skills,
+            seniority=seniority,
         )
 
         # Upward inference on the skill graph
@@ -1333,60 +1337,48 @@ def compute_affinities_and_domains(
     affinities = []
     for cluster in active_clusters:
         cluster_tech_skills = [s for s in cluster.centroid_skills if s.nature == SkillNature.TECH]
-        cluster_tech_norms = {s.normalized_name: s for s in cluster_tech_skills}
 
-        union_norms = set(cluster_tech_norms.keys()) | set(user_tech_norms.keys())
+        if not cluster_tech_skills:
+            continue
 
-        numerator = 0.0
-        denominator = 0.0
+        cluster_weight_total = (
+            sum(s.weight * (s.frequency or 1.0) for s in cluster_tech_skills) or 1.0
+        )
+        covered_weight = 0.0
         matched_skills = []
         partial_matches = []
         missing_skills = []
 
-        for norm_name in union_norms:
-            w = 1.0
-            if norm_name in cluster_tech_norms:
-                w = cluster_tech_norms[norm_name].weight
-            elif norm_name in user_tech_norms:
-                w = user_tech_norms[norm_name].weight
+        for cluster_skill in cluster_tech_skills:
+            norm_name = cluster_skill.normalized_name
+            w = cluster_skill.weight
+            f_s = cluster_skill.frequency or 1.0
+            skill_target_weight = w * f_s
 
-            in_user = norm_name in user_tech_norms
-            in_cluster = norm_name in cluster_tech_norms
-
-            f_s = cluster_tech_norms[norm_name].frequency if in_cluster else 1.0
-
-            if in_user and in_cluster:
-                # Evidence-based Jaccard: scale by the user's proficiency (ICT score / 10.0)
-                user_score = user_tech_norms[norm_name].ict_score / 10.0
-                numerator += w * f_s * user_score
-                denominator += w * f_s
-                matched_skills.append(cluster_tech_norms[norm_name].name)
-            elif in_cluster:
-                cluster_skill = cluster_tech_norms[norm_name]
-                cluster_domains = set(cluster_skill.domain_tags)
-
+            if norm_name in user_tech_norms:
+                covered_weight += skill_target_weight
+                matched_skills.append(cluster_skill.name)
+            else:
+                cluster_domains = set(cluster_skill.domain_tags or [])
                 partial_match_score = 0.0
                 if cluster_domains:
-                    # Find the user's best matching alternative skill in same domain
                     alternative_skills = [
-                        u for u in user_tech_skills if set(u.domain_tags) & cluster_domains
+                        u for u in user_tech_skills if set(u.domain_tags or []) & cluster_domains
                     ]
                     if alternative_skills:
-                        best_alt = max(alternative_skills, key=lambda u: u.ict_score)
-                        # Scale partial credit (30%) by the alternative's proficiency
-                        partial_match_score = 0.3 * (best_alt.ict_score / 10.0)
+                        best_alt = max(alternative_skills, key=lambda u: u.ict_score or 10.0)
+                        partial_match_score = 0.5
                         partial_matches.append((cluster_skill.name, best_alt.name))
 
-                if partial_match_score == 0.0:
+                if partial_match_score > 0.0:
+                    covered_weight += skill_target_weight * partial_match_score
+                else:
                     missing_skills.append(cluster_skill.name)
 
-                numerator += (w * f_s) * partial_match_score
-                denominator += w * f_s
-            else:
-                user_score = user_tech_norms[norm_name].ict_score / 10.0
-                denominator += w * user_score
-
-        score = (numerator / denominator) if denominator > 0.0 else 0.0
+        raw_coverage = covered_weight / cluster_weight_total
+        matching_count = len(matched_skills) + (len(partial_matches) * 0.5)
+        focus_ratio = min(1.0, matching_count / max(1, len(cluster_tech_skills)))
+        score = round((0.85 * raw_coverage) + (0.15 * (raw_coverage * focus_ratio)), 4)
 
         insight_parts = []
         if matched_skills:
@@ -1459,7 +1451,7 @@ def compute_affinities_and_domains(
             )
         )
 
-    affinities.sort(key=lambda a: a.affinity_score, reverse=True)
+    affinities.sort(key=lambda a: (a.affinity_score, len(a.detected_skills)), reverse=True)
     if not affinities:
         return None, [], [], []
 
@@ -2284,19 +2276,29 @@ class GetClusterDiagnosticUseCase:
             ((projected_salary_usd / max(1.0, current_estimated_salary_usd)) - 1.0) * 100, 1
         )
 
+        eur_rate = 0.92
         salary_projection_dto = {
             "current_estimated_salary_usd": current_estimated_salary_usd,
             "current_estimated_salary_pen": round(current_estimated_salary_usd * 3.75, 2),
+            "current_estimated_salary_eur": round(current_estimated_salary_usd * eur_rate, 2),
             "projected_salary_usd": projected_salary_usd,
             "projected_salary_pen": round(projected_salary_usd * 3.75, 2),
+            "projected_salary_eur": round(projected_salary_usd * eur_rate, 2),
             "potential_gain_percentage": max(0.0, potential_gain_percentage),
             "cluster_average_usd": avg_usd,
             "cluster_p75_usd": p75_usd,
             "salary_p25_usd": p25_usd,
             "salary_p25_pen": round(p25_usd * 3.75, 2),
+            "salary_p25_eur": round(p25_usd * eur_rate, 2),
             "salary_median_usd": p50_usd,
             "salary_median_pen": round(p50_usd * 3.75, 2),
+            "salary_median_eur": round(p50_usd * eur_rate, 2),
             "salary_p75_pen": round(p75_usd * 3.75, 2),
+            "salary_p75_eur": round(p75_usd * eur_rate, 2),
+            "market_tier": raw_insights.get("market_tier", "Tier 2 (Tech & Remoto Global)"),
+            "salary_differential_percentage": raw_insights.get(
+                "salary_differential_percentage", 0.0
+            ),
         }
 
         direct_matches = max(1, round(total_demand * max(0.05, min(1.0, aff_score))))

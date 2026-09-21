@@ -116,7 +116,6 @@ class Skill:
         return float(min(10.0, max(1.0, round(raw_score, 1))))
 
 
-
 @dataclass(frozen=True)
 class TechCluster:
     """A cluster of co-occurring technologies representing a specialty."""

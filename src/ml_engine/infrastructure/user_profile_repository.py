@@ -143,7 +143,9 @@ class SQLUserProfileRepository(UserProfileRepository):
                     personal_projects=skill.personal_projects,
                     years_of_experience=skill.years_of_experience,
                     has_certification=skill.has_certification,
-                    ict_score=skill.calculate_ict(),
+                    ict_score=skill.ict_score
+                    if skill.ict_score
+                    else skill.calculate_ict(profile.seniority),
                 )
                 self._session.add(profile_skill_rel)
 
@@ -237,10 +239,8 @@ class SQLUserProfileRepository(UserProfileRepository):
         skill_res = await self._session.execute(
             select(ProfileSkillModel)
             .options(
-                selectinload(ProfileSkillModel.skill)
-                .selectinload(SkillModel.aliases),
-                selectinload(ProfileSkillModel.skill)
-                .selectinload(SkillModel.standards),
+                selectinload(ProfileSkillModel.skill).selectinload(SkillModel.aliases),
+                selectinload(ProfileSkillModel.skill).selectinload(SkillModel.standards),
             )
             .where(ProfileSkillModel.profile_id == profile_model.profile_id)
         )
@@ -248,11 +248,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         for psm in skill_res.scalars().all():
             if not psm.skill:
                 continue
-            nature = (
-                SkillNature(psm.skill.nature)
-                if psm.skill.nature
-                else SkillNature.TECH
-            )
+            nature = SkillNature(psm.skill.nature) if psm.skill.nature else SkillNature.TECH
             skill_entity = Skill(
                 id=psm.skill.skill_id,
                 name=psm.skill.name,

@@ -67,8 +67,8 @@ def create_app() -> FastAPI:
         title=settings.PROJECT_NAME,
         version=settings.VERSION,
         description=(
-            "ML-powered API for tech skills gap analysis "
-            "and personalized learning roadmap generation."
+            "API for Devalign Web — Handles ML-based skills extraction, "
+            "market alignment diagnostics."
         ),
         openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
         docs_url=f"{settings.API_V1_PREFIX}/docs",

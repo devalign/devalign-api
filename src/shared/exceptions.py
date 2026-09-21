@@ -94,4 +94,4 @@ class RAGPipelineError(DevalignException):
     """Raised when the RAG/LLM generation pipeline fails."""
 
     status_code = HTTPStatus.INTERNAL_SERVER_ERROR
-    detail = "Roadmap generation error"
+    detail = "LLM generation error"

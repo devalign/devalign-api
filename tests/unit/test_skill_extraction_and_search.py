@@ -100,7 +100,6 @@ def test_clean_and_unpack_skills_string_list():
         assert item["self_taught"] is False
 
 
-
 def test_cluster_affinity_to_dto_mapping():
     """Verify ClusterAffinity converts to ClusterAffinityDTO with detected skills and gaps."""
     cluster_id = uuid4()

@@ -161,8 +161,9 @@ async def update_my_skills(
     Update skills list, years of experience, self-taught, certification, and recalculate ICT scores.
     """
     from dataclasses import replace
-    from src.ml_engine.domain.entities import Skill
+
     from src.ml_engine.application.use_cases import _nature_from_category
+    from src.ml_engine.domain.entities import Skill
 
     repo = SQLUserProfileRepository(session)
     profile = await repo.get_by_user_id(UUID(current_user_id))
@@ -178,7 +179,7 @@ async def update_my_skills(
             personal_projects = bool(s.get("personal_projects", False))
             has_cert = bool(s.get("has_certification", False))
             nature_val = s.get("skill_type") or s.get("nature") or "technical"
-            
+
             skill_obj = Skill(
                 name=s["name"],
                 nature=_nature_from_category(str(nature_val)),
@@ -201,7 +202,6 @@ async def update_my_skills(
     if not dto:
         raise HTTPException(status_code=404, detail="Profile not found after skill update")
     return dto
-
 
 
 @router.post("/cv", response_model=CVUploadResultDTO, status_code=201, summary="Upload CV document")
