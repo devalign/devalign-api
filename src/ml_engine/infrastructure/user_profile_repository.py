@@ -26,6 +26,36 @@ from src.ml_engine.infrastructure.models import (
 )
 
 
+def _derive_seniority(profile_model: ProfileModel) -> SeniorityLevel:
+    """Derive developer seniority from profile years of experience and job role text."""
+    years_exp = profile_model.years_experience
+    if isinstance(years_exp, (int, float)):
+        if years_exp >= 6:
+            return SeniorityLevel.SENIOR
+        if years_exp >= 3:
+            return SeniorityLevel.MID
+        return SeniorityLevel.JUNIOR
+
+    text = f"{profile_model.current_job_role or ''} {profile_model.cv_raw_text or ''}".lower()
+    if any(
+        k in text
+        for k in (
+            "lead",
+            "principal",
+            "staff",
+            "senior",
+            "sr.",
+            "sr ",
+            "architect",
+            "tech lead",
+        )
+    ):
+        return SeniorityLevel.SENIOR
+    if any(k in text for k in ("mid", "semi-senior", "ssr", "intermediate")):
+        return SeniorityLevel.MID
+    return SeniorityLevel.JUNIOR
+
+
 class SQLUserProfileRepository(UserProfileRepository):
     """SQLAlchemy implementation of UserProfileRepository."""
 
@@ -113,7 +143,9 @@ class SQLUserProfileRepository(UserProfileRepository):
                     personal_projects=skill.personal_projects,
                     years_of_experience=skill.years_of_experience,
                     has_certification=skill.has_certification,
-                    ict_score=skill.calculate_ict(),
+                    ict_score=skill.ict_score
+                    if skill.ict_score
+                    else skill.calculate_ict(profile.seniority),
                 )
                 self._session.add(profile_skill_rel)
 
@@ -197,44 +229,47 @@ class SQLUserProfileRepository(UserProfileRepository):
     async def get_by_user_id(self, user_id: UUID) -> UserProfile | None:
         # Fetch profile with profile_skills relation
         result = await self._session.execute(
-            select(ProfileModel)
-            .where(ProfileModel.user_id == user_id)
-            .options(
-                selectinload(ProfileModel.profile_skills).selectinload(ProfileSkillModel.skill)
-            )
+            select(ProfileModel).where(ProfileModel.user_id == user_id)
         )
         profile_model = result.scalar_one_or_none()
         if not profile_model:
             return None
 
-        # Map global profile_skills
+        # 1. Fetch all profile-level skills directly from ProfileSkillModel
+        skill_res = await self._session.execute(
+            select(ProfileSkillModel)
+            .options(
+                selectinload(ProfileSkillModel.skill).selectinload(SkillModel.aliases),
+                selectinload(ProfileSkillModel.skill).selectinload(SkillModel.standards),
+            )
+            .where(ProfileSkillModel.profile_id == profile_model.profile_id)
+        )
         global_detected_skills = []
-        if profile_model.profile_skills:
-            for ps in profile_model.profile_skills:
-                if not ps.skill:
-                    continue
-                skill_entity = Skill(
-                    id=ps.skill.skill_id,
-                    name=ps.skill.name,
-                    nature=SkillNature(ps.skill.nature) if ps.skill.nature else SkillNature.TECH,
-                    normalized_name=ps.skill.name.lower().replace(" ", "").replace(".", ""),
-                    weight=float(ps.skill.weight),
-                    frequency=1.0,
-                    domain_tags=ps.skill.domain_tags or [],
-                    core_domains=ps.skill.core_domains or [],
-                    self_taught=ps.self_taught,
-                    personal_projects=ps.personal_projects,
-                    years_of_experience=ps.years_of_experience,
-                    has_certification=ps.has_certification,
-                    ict_score=float(ps.ict_score),
-                )
-                global_detected_skills.append(skill_entity)
+        for psm in skill_res.scalars().all():
+            if not psm.skill:
+                continue
+            nature = SkillNature(psm.skill.nature) if psm.skill.nature else SkillNature.TECH
+            skill_entity = Skill(
+                id=psm.skill.skill_id,
+                name=psm.skill.name,
+                nature=nature,
+                normalized_name=psm.skill.name.lower().replace(" ", "").replace(".", ""),
+                weight=float(psm.skill.weight),
+                frequency=1.0,
+                domain_tags=psm.skill.domain_tags or [],
+                core_domains=psm.skill.core_domains or [],
+                self_taught=bool(psm.self_taught),
+                personal_projects=bool(psm.personal_projects),
+                years_of_experience=int(psm.years_of_experience or 0),
+                has_certification=bool(psm.has_certification),
+                ict_score=float(psm.ict_score) if psm.ict_score is not None else 0.0,
+            )
+            global_detected_skills.append(skill_entity)
 
-        # Fetch all diagnostics for the profile, sorted by created_at desc
+        # 2. Fetch all diagnostics for this profile with eager loading
         diag_result = await self._session.execute(
             select(DiagnosticModel)
             .where(DiagnosticModel.profile_id == profile_model.profile_id)
-            .order_by(DiagnosticModel.created_at.desc())
             .options(
                 selectinload(DiagnosticModel.detected_cluster)
                 .selectinload(ClusterModel.cluster_skills)
@@ -246,13 +281,15 @@ class SQLUserProfileRepository(UserProfileRepository):
         )
         all_diagnostics = diag_result.scalars().all()
 
+        derived_seniority = _derive_seniority(profile_model)
+
         if not all_diagnostics:
             return UserProfile(
                 user_id=profile_model.user_id,
                 cv_id=profile_model.cv_id,
                 embedding=[],
                 detected_skills=global_detected_skills,
-                seniority=SeniorityLevel.JUNIOR,
+                seniority=derived_seniority,
                 primary_affinity=ClusterAffinity(
                     cluster_id=uuid4(),
                     cluster_name="Sin Diagnóstico",
@@ -379,7 +416,7 @@ class SQLUserProfileRepository(UserProfileRepository):
             detected_skills=global_detected_skills
             if global_detected_skills
             else primary_affinity.detected_skills,
-            seniority=SeniorityLevel.MID,
+            seniority=derived_seniority,
             primary_affinity=primary_affinity,
             secondary_affinities=secondary_affinities,
             skill_gaps=primary_affinity.skill_gaps,

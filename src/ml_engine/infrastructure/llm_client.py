@@ -99,6 +99,18 @@ class NativeLLMClient(LLMService):
                         f"Rate limit exceeded for {self.provider}. Response: {body}"
                     ) from e
 
+                if (
+                    status == 400
+                    and "json_validate_failed" in body
+                    and "response_format" in payload
+                ):
+                    logger.warning(
+                        "LLM JSON mode validation failed on provider, retrying without response_format constraint",
+                        provider=self.provider,
+                    )
+                    payload.pop("response_format", None)
+                    continue
+
                 if status >= 500 and attempt == 0:
                     logger.warning(
                         "LLM server error, retrying once",

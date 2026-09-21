@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         "Starting Devalign API",
         env=settings.APP_ENV,
         version=settings.VERSION,
+        llm_provider=settings.LLM_PROVIDER,
+        llm_model=settings.LLM_MODEL,
     )
 
     async def prewarm_cache() -> None:
@@ -65,8 +67,8 @@ def create_app() -> FastAPI:
         title=settings.PROJECT_NAME,
         version=settings.VERSION,
         description=(
-            "ML-powered API for tech skills gap analysis "
-            "and personalized learning roadmap generation."
+            "API for Devalign Web — Handles ML-based skills extraction, "
+            "market alignment diagnostics."
         ),
         openapi_url=f"{settings.API_V1_PREFIX}/openapi.json",
         docs_url=f"{settings.API_V1_PREFIX}/docs",

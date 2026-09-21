@@ -92,12 +92,28 @@ class Skill:
     ict_score: float = 0.0
     is_custom: bool = False
 
-    def calculate_ict(self) -> float:
-        exp_points = 3 * self.years_of_experience
-        cert_points = 4 if self.has_certification else 0
-        projects_points = 2 if self.personal_projects else 0
-        self_taught_points = 1 if self.self_taught else 0
-        return float(min(10.0, self_taught_points + projects_points + exp_points + cert_points))
+    def calculate_ict(self, global_seniority: SeniorityLevel | None = None) -> float:
+        exp = self.years_of_experience
+
+        # Heuristic scaling: align baseline skill experience with candidate seniority if exp not provided
+        if exp == 0 and global_seniority is not None:
+            if global_seniority == SeniorityLevel.SENIOR:
+                exp = 3
+            elif global_seniority == SeniorityLevel.STAFF:
+                exp = 4
+            elif global_seniority == SeniorityLevel.MID:
+                exp = 2
+
+        exp_points = 3.0 * exp
+        cert_points = 4.0 if self.has_certification else 0.0
+        projects_points = 2.0 if self.personal_projects else 0.0
+        self_taught_points = 1.0 if self.self_taught else 0.0
+
+        raw_score = exp_points + cert_points + projects_points + self_taught_points
+        if raw_score <= 0.0 and exp > 0:
+            raw_score = 3.0 * exp
+
+        return float(min(10.0, max(1.0, round(raw_score, 1))))
 
 
 @dataclass(frozen=True)
