@@ -1,4 +1,4 @@
-﻿"""Reprocess and normalize all job offers in the database.
+"""Reprocess and normalize all job offers in the database.
 
 Matches raw_hard_skills against the canonical skills catalog (Lightcast + curated Custom),
 expands slash-separated compounds, creates offer_skills relations,
@@ -43,6 +43,8 @@ SINGLE_SLASH_TERMS = {
     "etl/elt",
     "os/2",
     "ui/ux",
+    "ux/ui",
+    "ai/ml",
 }
 
 
@@ -88,7 +90,9 @@ async def main():
             norm_to_skill[a_name.strip().lower()] = s_id
             norm_to_skill[clean_norm_key(a_name)] = s_id
 
-        logger.info(f"Loaded {len(canonical_skills)} canonical skills with {len(norm_to_skill)} index keys.")
+        logger.info(
+            f"Loaded {len(canonical_skills)} canonical skills with {len(norm_to_skill)} index keys."
+        )
 
         # 2. Load clusters and cluster_skills
         logger.info("Loading clusters and centroid skills...")
@@ -246,11 +250,10 @@ async def main():
         logger.info(f"Bulk updating {total_updates} job_offers...")
         for i in range(0, total_updates, update_chunk_size):
             chunk = offers_update_payload[i : i + update_chunk_size]
-            await session.execute(
-                update(JobOfferModel),
-                chunk
+            await session.execute(update(JobOfferModel), chunk)
+            logger.info(
+                f"Updated job_offers: {min(i + update_chunk_size, total_updates)}/{total_updates}"
             )
-            logger.info(f"Updated job_offers: {min(i + update_chunk_size, total_updates)}/{total_updates}")
         await session.commit()
 
         # 8. Update clusters.job_offer_count with new counts
@@ -266,16 +269,16 @@ async def main():
         logger.info("=== Batch Normalization Summary ===")
         logger.info(f"Total job offers: {total_offers}")
         logger.info(
-            f"Offers with canonical skills: {offers_with_skills} ({offers_with_skills/total_offers*100:.1f}%)"
+            f"Offers with canonical skills: {offers_with_skills} ({offers_with_skills / total_offers * 100:.1f}%)"
         )
         logger.info(
-            f"Offers assigned to clusters: {offers_assigned_cluster} ({offers_assigned_cluster/total_offers*100:.1f}%)"
+            f"Offers assigned to clusters: {offers_assigned_cluster} ({offers_assigned_cluster / total_offers * 100:.1f}%)"
         )
         logger.info(
-            f"Offers with parsed salary: {offers_with_salary} ({offers_with_salary/total_offers*100:.1f}%)"
+            f"Offers with parsed salary: {offers_with_salary} ({offers_with_salary / total_offers * 100:.1f}%)"
         )
         logger.info(
-            f"Offers with parsed experience: {offers_with_exp} ({offers_with_exp/total_offers*100:.1f}%)"
+            f"Offers with parsed experience: {offers_with_exp} ({offers_with_exp / total_offers * 100:.1f}%)"
         )
         logger.info(f"Total offer_skills links created: {total_links}")
 

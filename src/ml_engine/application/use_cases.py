@@ -37,6 +37,7 @@ from src.ml_engine.domain.ports import (
     UserProfileRepository,
 )
 from src.shared.exceptions import MLPipelineError
+from src.shared.telemetry import TelemetryTracker
 
 logger = structlog.get_logger(__name__)
 
@@ -442,7 +443,22 @@ class ProfileUserFromCVUseCase:
             cv_text, extracted_data
         """
         logger.info("Extracting CV text", user_id=str(user_id))
-        cv_text = await self._cv_parser.extract_text(cv_content, content_type)
+        async with TelemetryTracker(
+            "cv_parsing",
+            user_id=user_id,
+            initial_metadata={
+                "cv_id": str(cv_id),
+                "file_size_bytes": len(cv_content),
+                "content_type": content_type,
+            },
+        ) as parse_tracker:
+            cv_text = await self._cv_parser.extract_text(cv_content, content_type)
+            parse_tracker.add_metadata(
+                {
+                    "char_count": len(cv_text),
+                    "word_count": len(cv_text.split()),
+                }
+            )
 
         if not cv_text.strip():
             raise MLPipelineError("CV text extraction returned empty content")
@@ -455,20 +471,53 @@ class ProfileUserFromCVUseCase:
             )
         logger.debug("Document classified as CV", confidence=confidence)
 
-        extracted_data = await self._combined_llm_extraction(cv_text)
+        async with TelemetryTracker(
+            "llm_extraction_phase1",
+            user_id=user_id,
+            initial_metadata={
+                "cv_id": str(cv_id),
+                "classification_confidence": confidence,
+            },
+        ) as llm_tracker:
+            extracted_data = await self._combined_llm_extraction(cv_text)
 
-        # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
-        if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
-            try:
-                extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
-                    extracted_data["skills"]
-                )
-                logger.info(
-                    "Pre-normalized extracted skills against catalog",
-                    count=len(extracted_data["skills"]),
-                )
-            except Exception as exc:
-                logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
+            # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
+            raw_skills_count = 0
+            if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
+                raw_skills_count = len(extracted_data["skills"])
+                try:
+                    extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
+                        extracted_data["skills"]
+                    )
+                    logger.info(
+                        "Pre-normalized extracted skills against catalog",
+                        count=len(extracted_data["skills"]),
+                    )
+                except Exception as exc:
+                    logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
+
+            skills_list = extracted_data.get("skills", [])
+            std_count = sum(
+                1 for s in skills_list if isinstance(s, dict) and not s.get("is_custom", False)
+            )
+            custom_count = sum(
+                1 for s in skills_list if isinstance(s, dict) and s.get("is_custom", False)
+            )
+            total_extracted = len(skills_list) if isinstance(skills_list, list) else 0
+
+            llm_tracker.add_metadata(
+                {
+                    "raw_skills_count": raw_skills_count,
+                    "total_skills_phase1": total_extracted,
+                    "standard_skills_phase1": std_count,
+                    "custom_skills_phase1": custom_count,
+                    "standardization_ratio_phase1": (
+                        round(std_count / total_extracted, 4) if total_extracted > 0 else 0.0
+                    ),
+                    "role_extracted": extracted_data.get("current_job_role"),
+                    "years_experience": extracted_data.get("years_experience"),
+                }
+            )
 
         return {
             "cv_text": cv_text,
@@ -498,224 +547,269 @@ class ProfileUserFromCVUseCase:
 
         seniority = profile.seniority
 
-        # If validated_skills provided, convert to raw_skills format
-        if validated_skills is not None:
-            raw_skills = [
-                {
-                    "name": s.name,
-                    "category": s.skill_type,
-                    "years_of_experience": s.years_of_experience or 0,
-                    "personal_projects": s.personal_projects or False,
-                    "has_certification": s.has_certification or False,
-                    "is_custom": getattr(s, "is_custom", False),
-                }
-                for s in validated_skills
-            ]
-        else:
-            # Use whatever raw data is available from the existing profile
-            extracted_data_skills = []
-            for s in profile.detected_skills:
-                extracted_data_skills.append(
+        async with TelemetryTracker(
+            "diagnosis_phase2",
+            user_id=user_id,
+            initial_metadata={
+                "cv_id": str(cv_id),
+                "validated_skills_provided": validated_skills is not None,
+                "validated_skills_count": len(validated_skills)
+                if validated_skills is not None
+                else 0,
+            },
+        ) as diag_tracker:
+            # If validated_skills provided, convert to raw_skills format
+            if validated_skills is not None:
+                raw_skills = [
                     {
                         "name": s.name,
-                        "category": s.nature.value if s.nature else "technical",
+                        "category": s.skill_type,
                         "years_of_experience": s.years_of_experience or 0,
                         "personal_projects": s.personal_projects or False,
                         "has_certification": s.has_certification or False,
                         "is_custom": getattr(s, "is_custom", False),
                     }
+                    for s in validated_skills
+                ]
+            else:
+                # Use whatever raw data is available from the existing profile
+                extracted_data_skills = []
+                for s in profile.detected_skills:
+                    extracted_data_skills.append(
+                        {
+                            "name": s.name,
+                            "category": s.nature.value if s.nature else "technical",
+                            "years_of_experience": s.years_of_experience or 0,
+                            "personal_projects": s.personal_projects or False,
+                            "has_certification": s.has_certification or False,
+                            "is_custom": getattr(s, "is_custom", False),
+                        }
+                    )
+                raw_skills = extracted_data_skills if extracted_data_skills else []
+
+            # Embedding (static zero-vector for backwards compatibility)
+            cv_embedding = [0.0] * 1024
+
+            # Normalize user skills against the canonical catalog
+            logger.info("Phase 2 — normalising skills", user_id=str(user_id))
+            all_skills = await self._skills.get_all_skills()
+            detected_skills = await self._normalize_user_skills(
+                raw_skills,
+                use_llm_fallback=False,
+                existing_skills_cache=all_skills,
+                seniority=seniority,
+            )
+
+            # Upward inference on the skill graph
+            detected_skills = await self._expand_with_upward_inference(
+                detected_skills,
+                all_skills=all_skills,
+            )
+
+            # Load active clusters
+            clusters = await self._clusters.get_all_active()
+            if not clusters:
+                logger.warning(
+                    "No tech clusters available — skipping Phase 2 diagnosis",
+                    user_id=str(user_id),
                 )
-            raw_skills = extracted_data_skills if extracted_data_skills else []
+                diag_tracker.add_metadata({"status_detail": "no_clusters_available"})
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=profile.full_name,
+                    message="Profile saved. Diagnosis skipped — no clusters configured.",
+                )
 
-        # Embedding (static zero-vector for backwards compatibility)
-        cv_embedding = [0.0] * 1024
+            active_clusters = [c for c in clusters if c.centroid_skills]
+            if not active_clusters:
+                logger.warning(
+                    "No active clusters with centroid skills — skipping Phase 2",
+                    user_id=str(user_id),
+                )
+                diag_tracker.add_metadata({"status_detail": "no_active_clusters_with_centroids"})
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=profile.full_name,
+                    message="Profile saved. Diagnosis skipped — clusters have no centroid skills.",
+                )
 
-        # Normalize user skills against the canonical catalog
-        logger.info("Phase 2 — normalising skills", user_id=str(user_id))
-        all_skills = await self._skills.get_all_skills()
-        detected_skills = await self._normalize_user_skills(
-            raw_skills,
-            use_llm_fallback=False,
-            existing_skills_cache=all_skills,
-            seniority=seniority,
-        )
+            # Compute Weighted Jaccard Similarity per cluster
+            _primary_raw, _secondaries_raw, affinities_raw, domain_affinities_dto = (
+                compute_affinities_and_domains(detected_skills, active_clusters)
+            )
+            if not affinities_raw:
+                logger.warning(
+                    "No cluster affinities — skipping Phase 2",
+                    user_id=str(user_id),
+                )
+                diag_tracker.add_metadata({"status_detail": "no_cluster_affinities_computed"})
+                return UserProfileDTO(
+                    user_id=user_id,
+                    cv_id=cv_id,
+                    seniority=seniority.value,
+                    primary_specialty="Sin Diagnóstico",
+                    alignment_score=0.0,
+                    full_name=profile.full_name,
+                    message="Profile saved. Could not compute cluster affinity.",
+                )
 
-        # Upward inference on the skill graph
-        detected_skills = await self._expand_with_upward_inference(
-            detected_skills,
-            all_skills=all_skills,
-        )
+            # Select Top 3 affinities with affinity_score > 0
+            valid_affinities = [a for a in affinities_raw if a.affinity_score > 0]
+            if not valid_affinities:
+                valid_affinities = affinities_raw[:1]
+            top_affinities = valid_affinities[:3]
 
-        # Load active clusters
-        clusters = await self._clusters.get_all_active()
-        if not clusters:
-            logger.warning(
-                "No tech clusters available — skipping Phase 2 diagnosis",
+            from dataclasses import replace as dc_replace_affinity
+
+            primary = dc_replace_affinity(top_affinities[0], is_primary=True)
+            secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
+
+            # Detect skill gaps vs primary cluster
+            primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
+            skill_gaps = []
+
+            if primary_cluster:
+                user_tech_skills = {
+                    s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
+                }
+                primary_cluster_tech_skills = [
+                    s
+                    for s in primary_cluster.centroid_skills
+                    if s.nature == SkillNature.TECH and not is_concept_skill(s)
+                ]
+                for skill in primary_cluster_tech_skills:
+                    if skill.normalized_name not in user_tech_skills:
+                        priority = skill.weight * skill.frequency
+                        if priority >= 2.0:
+                            importance = "critical"
+                        elif priority >= 1.0:
+                            importance = "high"
+                        else:
+                            importance = "medium"
+                        skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
+                skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
+
+            # Persist enriched profile with is_diagnosed=True and Top 3 affinities
+            logger.info(
+                "Phase 2 — persisting full diagnosis with Top 3 affinities",
                 user_id=str(user_id),
+                primary=primary.cluster_name,
+                secondaries=[s.cluster_name for s in secondaries],
             )
-            return UserProfileDTO(
-                user_id=user_id,
-                cv_id=cv_id,
-                seniority=seniority.value,
-                primary_specialty="Sin Diagnóstico",
-                alignment_score=0.0,
-                full_name=profile.full_name,
-                message="Profile saved. Diagnosis skipped — no clusters configured.",
+            from dataclasses import replace as dc_replace_profile
+
+            diagnosed_profile = dc_replace_profile(
+                profile,
+                embedding=cv_embedding,
+                detected_skills=detected_skills,
+                seniority=seniority,
+                primary_affinity=primary,
+                secondary_affinities=secondaries,
+                skill_gaps=skill_gaps,
+                is_diagnosed=True,
+            )
+            await self._profiles.save(diagnosed_profile)
+
+            # Record telemetry metrics for thesis evaluation
+            total_skills = len(detected_skills)
+            std_count = sum(1 for s in detected_skills if not getattr(s, "is_custom", False))
+            custom_count = sum(1 for s in detected_skills if getattr(s, "is_custom", False))
+            inferred_count = sum(
+                1 for s in detected_skills if len(getattr(s, "inferred_from", [])) > 0
             )
 
-        active_clusters = [c for c in clusters if c.centroid_skills]
-        if not active_clusters:
-            logger.warning(
-                "No active clusters with centroid skills — skipping Phase 2",
+            diag_tracker.add_metadata(
+                {
+                    "total_skills": total_skills,
+                    "standard_skills": std_count,
+                    "custom_skills": custom_count,
+                    "inferred_skills": inferred_count,
+                    "standardization_ratio": (
+                        round(std_count / total_skills, 4) if total_skills > 0 else 0.0
+                    ),
+                    "inference_ratio": (
+                        round(inferred_count / total_skills, 4) if total_skills > 0 else 0.0
+                    ),
+                    "primary_cluster": primary.cluster_name,
+                    "affinity_score": round(primary.affinity_score, 4),
+                    "gaps_count": len(skill_gaps),
+                    "seniority": seniority.value,
+                }
+            )
+
+            logger.info(
+                "Phase 2 complete — full diagnosis persisted",
                 user_id=str(user_id),
-            )
-            return UserProfileDTO(
-                user_id=user_id,
-                cv_id=cv_id,
-                seniority=seniority.value,
-                primary_specialty="Sin Diagnóstico",
-                alignment_score=0.0,
-                full_name=profile.full_name,
-                message="Profile saved. Diagnosis skipped — clusters have no centroid skills.",
+                specialty=primary.cluster_name,
+                score=primary.affinity_score,
             )
 
-        # Compute Weighted Jaccard Similarity per cluster
-        _primary_raw, _secondaries_raw, affinities_raw, domain_affinities_dto = (
-            compute_affinities_and_domains(detected_skills, active_clusters)
-        )
-        if not affinities_raw:
-            logger.warning(
-                "No cluster affinities — skipping Phase 2",
-                user_id=str(user_id),
-            )
-            return UserProfileDTO(
-                user_id=user_id,
-                cv_id=cv_id,
-                seniority=seniority.value,
-                primary_specialty="Sin Diagnóstico",
-                alignment_score=0.0,
-                full_name=profile.full_name,
-                message="Profile saved. Could not compute cluster affinity.",
-            )
-
-        # Select Top 3 affinities with affinity_score > 0
-        valid_affinities = [a for a in affinities_raw if a.affinity_score > 0]
-        if not valid_affinities:
-            valid_affinities = affinities_raw[:1]
-        top_affinities = valid_affinities[:3]
-
-        from dataclasses import replace as dc_replace_affinity
-
-        primary = dc_replace_affinity(top_affinities[0], is_primary=True)
-        secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
-
-        # Detect skill gaps vs primary cluster
-        primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
-        skill_gaps = []
-
-        if primary_cluster:
-            user_tech_skills = {
-                s.normalized_name for s in detected_skills if s.nature == SkillNature.TECH
-            }
-            primary_cluster_tech_skills = [
-                s
-                for s in primary_cluster.centroid_skills
-                if s.nature == SkillNature.TECH and not is_concept_skill(s)
+            # Build response DTOs for all Top 3 affinities
+            user_skills_map = {s.normalized_name: s for s in detected_skills}
+            primary_dto = _cluster_affinity_to_dto(primary, True, user_skills_map)
+            secondaries_dto = [
+                _cluster_affinity_to_dto(a, False, user_skills_map) for a in secondaries
             ]
-            for skill in primary_cluster_tech_skills:
-                if skill.normalized_name not in user_tech_skills:
-                    priority = skill.weight * skill.frequency
-                    if priority >= 2.0:
-                        importance = "critical"
-                    elif priority >= 1.0:
-                        importance = "high"
-                    else:
-                        importance = "medium"
-                    skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
-            skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
+            all_affinities_dto = [primary_dto, *secondaries_dto]
 
-        # Persist enriched profile with is_diagnosed=True and Top 3 affinities
-        logger.info(
-            "Phase 2 — persisting full diagnosis with Top 3 affinities",
-            user_id=str(user_id),
-            primary=primary.cluster_name,
-            secondaries=[s.cluster_name for s in secondaries],
-        )
-        from dataclasses import replace as dc_replace_profile
+            return UserProfileDTO(
+                user_id=user_id,
+                cv_id=cv_id,
+                seniority=seniority.value,
+                primary_specialty=primary.cluster_name,
+                alignment_score=primary.affinity_score,
+                secondary_affinities=secondaries_dto,
+                all_affinities=all_affinities_dto,
+                domain_affinities=domain_affinities_dto,
+                detected_skills=[
+                    SkillDTO(
+                        name=s.name,
+                        skill_type=s.nature.value,
+                        market_importance="consolidated",
+                        market_demand_percentage=_normalize_demand_percentage(s.frequency),
+                        self_taught=s.self_taught,
+                        personal_projects=s.personal_projects,
+                        years_of_experience=s.years_of_experience,
+                        has_certification=s.has_certification,
+                        ict_score=s.ict_score,
+                        trend=determine_trend(s.name),
+                        is_custom=getattr(s, "is_custom", False),
+                    )
+                    for s in detected_skills
+                ],
+                skill_gaps=[
+                    SkillDTO(
+                        name=g.skill.name,
+                        skill_type=g.skill.nature.value,
+                        market_importance=g.market_importance,
+                        market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
+                        trend=determine_trend(g.skill.name),
+                    )
+                    for g in skill_gaps
+                    if not is_concept_skill(g.skill)
+                ],
+                full_name=diagnosed_profile.full_name,
+                current_job_role=diagnosed_profile.current_job_role,
+                years_experience=diagnosed_profile.years_experience,
+                preferred_modality=diagnosed_profile.preferred_modality,
+                location=diagnosed_profile.location,
+                availability=diagnosed_profile.availability,
+                work_experience=diagnosed_profile.work_experience,
+                education=diagnosed_profile.education,
+                certifications=diagnosed_profile.certifications,
+                is_diagnosed=True,
+                message="Profile generated successfully",
+            )
 
-        diagnosed_profile = dc_replace_profile(
-            profile,
-            embedding=cv_embedding,
-            detected_skills=detected_skills,
-            seniority=seniority,
-            primary_affinity=primary,
-            secondary_affinities=secondaries,
-            skill_gaps=skill_gaps,
-            is_diagnosed=True,
-        )
-        await self._profiles.save(diagnosed_profile)
-
-        logger.info(
-            "Phase 2 complete — full diagnosis persisted",
-            user_id=str(user_id),
-            specialty=primary.cluster_name,
-            score=primary.affinity_score,
-        )
-
-        # Build response DTOs for all Top 3 affinities
-        user_skills_map = {s.normalized_name: s for s in detected_skills}
-        primary_dto = _cluster_affinity_to_dto(primary, True, user_skills_map)
-        secondaries_dto = [_cluster_affinity_to_dto(a, False, user_skills_map) for a in secondaries]
-        all_affinities_dto = [primary_dto, *secondaries_dto]
-
-        return UserProfileDTO(
-            user_id=user_id,
-            cv_id=cv_id,
-            seniority=seniority.value,
-            primary_specialty=primary.cluster_name,
-            alignment_score=primary.affinity_score,
-            secondary_affinities=secondaries_dto,
-            all_affinities=all_affinities_dto,
-            domain_affinities=domain_affinities_dto,
-            detected_skills=[
-                SkillDTO(
-                    name=s.name,
-                    skill_type=s.nature.value,
-                    market_importance="consolidated",
-                    market_demand_percentage=_normalize_demand_percentage(s.frequency),
-                    self_taught=s.self_taught,
-                    personal_projects=s.personal_projects,
-                    years_of_experience=s.years_of_experience,
-                    has_certification=s.has_certification,
-                    ict_score=s.ict_score,
-                    trend=determine_trend(s.name),
-                    is_custom=getattr(s, "is_custom", False),
-                )
-                for s in detected_skills
-            ],
-            skill_gaps=[
-                SkillDTO(
-                    name=g.skill.name,
-                    skill_type=g.skill.nature.value,
-                    market_importance=g.market_importance,
-                    market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
-                    trend=determine_trend(g.skill.name),
-                )
-                for g in skill_gaps
-                if not is_concept_skill(g.skill)
-            ],
-            full_name=diagnosed_profile.full_name,
-            current_job_role=diagnosed_profile.current_job_role,
-            years_experience=diagnosed_profile.years_experience,
-            preferred_modality=diagnosed_profile.preferred_modality,
-            location=diagnosed_profile.location,
-            availability=diagnosed_profile.availability,
-            work_experience=diagnosed_profile.work_experience,
-            education=diagnosed_profile.education,
-            certifications=diagnosed_profile.certifications,
-            is_diagnosed=True,
-            message="Profile generated successfully",
-        )
+        raise MLPipelineError("Diagnosis phase 2 completed without producing a profile DTO.")
 
     async def execute(
         self,
