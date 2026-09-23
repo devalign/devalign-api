@@ -30,6 +30,7 @@ from src.ml_engine.infrastructure.cluster_repository import SQLClusterRepository
 from src.ml_engine.infrastructure.user_profile_repository import SQLUserProfileRepository
 from src.shared.security import CurrentUserIdDep, CurrentUserPayloadDep
 from src.shared.supabase_client import get_supabase_admin_client
+from src.shared.telemetry import record_telemetry_event
 
 router = APIRouter(prefix="/me", tags=["User Portal — Profile & CV"])
 
@@ -327,15 +328,32 @@ async def run_profile_analysis_task(
             )
     except Exception as exc:
         is_rate_limit = isinstance(exc, RateLimitError)
-        error_msg = str(exc)
+        raw_error = str(exc)
         bg_logger.exception(
             "CV analysis background task failed",
             user_id=str(user_id),
             cv_id=str(cv_id),
-            error=str(exc),
+            error=raw_error,
             is_rate_limit=is_rate_limit,
         )
 
+        await record_telemetry_event(
+            "cv_pipeline_error",
+            user_id=user_id,
+            status="error",
+            error_message=raw_error,
+            metadata={"cv_id": str(cv_id), "phase": 1, "is_rate_limit": is_rate_limit},
+        )
+
+        # Produce a user-friendly error message for the frontend
+        if "404" in raw_error or "not found" in raw_error.lower() or "llm" in raw_error.lower():
+            error_msg = "El servicio de análisis con IA no está disponible temporalmente. Por favor, intenta de nuevo."
+        elif is_rate_limit or "rate limit" in raw_error.lower():
+            error_msg = "Se ha alcanzado el límite de solicitudes de IA. Por favor, espera un momento e intenta de nuevo."
+        elif "not appear to be a professional cv" in raw_error.lower():
+            error_msg = "El documento no parece ser un currículum profesional válido. Asegúrate de incluir experiencia y habilidades técnicas."
+        else:
+            error_msg = "Ocurrió un error al procesar el CV. Por favor, intenta subirlo nuevamente."
         # Retry setting status to "failed" up to 3 times
         last_db_exc: Exception | None = None
         for attempt in range(3):
@@ -725,6 +743,13 @@ async def finalize_cv_analysis(
                     user_id=str(uid),
                     cv_id=str(cvid),
                     error=str(exc),
+                )
+                await record_telemetry_event(
+                    "diagnosis_pipeline_error",
+                    user_id=uid,
+                    status="error",
+                    error_message=str(exc),
+                    metadata={"cv_id": str(cvid), "phase": 2},
                 )
                 await cv_repo_bg.update_status(cvid, "failed", error_message=str(exc))
                 await bg_session.commit()

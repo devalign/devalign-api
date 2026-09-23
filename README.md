@@ -72,7 +72,6 @@ La documentación de diseño, decisiones arquitectónicas, base de datos y contr
 - [🤝 Contratos de Interfaz](../devalign-docs/CONTRACTS.md)
 - [🗄️ Modelo de Base de Datos](../devalign-docs/DATABASE.md)
 - [🧠 Lógica Core e Inferencia](../devalign-docs/MODEL.md)
-- [🗺️ Roadmap de Producto](../devalign-docs/ROADMAP.md)
 - [🎯 Alcance MVP](../devalign-docs/SCOPE.md)
 - [📄 Documento de Requerimientos de Producto (PRD)](../devalign-docs/PRD.md)
 - [📋 Product Backlog](../devalign-docs/PRODUCT_BACKLOG.md)

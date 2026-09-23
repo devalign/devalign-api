@@ -31,6 +31,7 @@ from src.ml_engine.infrastructure.models import (  # noqa: F401
 )
 from src.scraper.infrastructure.models import JobOfferModel, OfferSkillModel  # noqa: F401
 from src.shared.database import Base
+from src.shared.telemetry.models import TelemetryEventModel  # noqa: F401
 
 config = context.config
 
