@@ -808,9 +808,7 @@ class ProfileUserFromCVUseCase:
             from dataclasses import replace as dc_replace_affinity
 
             primary = dc_replace_affinity(valid_affinities[0], is_primary=True)
-            secondaries = [
-                dc_replace_affinity(a, is_primary=False) for a in valid_affinities[1:]
-            ]
+            secondaries = [dc_replace_affinity(a, is_primary=False) for a in valid_affinities[1:]]
 
             # Detect skill gaps vs primary cluster
             primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
@@ -896,9 +894,12 @@ class ProfileUserFromCVUseCase:
 
             # Build response DTOs for all Top 3 affinities
             user_skills_map = {s.normalized_name: s for s in detected_skills}
-            primary_dto = _cluster_affinity_to_dto(primary, True, user_skills_map)
+            primary_dto = _cluster_affinity_to_dto(
+                primary, True, user_skills_map, is_evaluated=True
+            )
             secondaries_dto = [
-                _cluster_affinity_to_dto(a, False, user_skills_map) for a in secondaries
+                _cluster_affinity_to_dto(a, False, user_skills_map, is_evaluated=False)
+                for a in secondaries
             ]
             all_affinities_dto = [primary_dto, *secondaries_dto]
 
@@ -1109,6 +1110,7 @@ def _cluster_affinity_to_dto(
     affinity: ClusterAffinity,
     is_primary: bool,
     user_skills_map: dict[str, Any],
+    is_evaluated: bool = False,
 ) -> ClusterAffinityDTO:
     """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
     return ClusterAffinityDTO(
@@ -1116,6 +1118,7 @@ def _cluster_affinity_to_dto(
         cluster_name=affinity.cluster_name,
         affinity_score=affinity.affinity_score,
         is_primary=is_primary,
+        is_evaluated=is_evaluated,
         market_insights=affinity.market_insights,
         compatible_roles=affinity.compatible_roles,
         ai_insight=affinity.ai_insight,
@@ -2371,6 +2374,13 @@ class GetMyProfileUseCase:
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
 
+        persisted_cluster_names = set()
+        if primary and primary.cluster_name and primary.cluster_name != "Sin Diagnóstico":
+            persisted_cluster_names.add(primary.cluster_name.lower())
+        for a in secondaries or []:
+            if a.cluster_name:
+                persisted_cluster_names.add(a.cluster_name.lower())
+
         # Derive secondary affinities on-the-fly for diagnosed profiles where secondaries were not stored
         if (
             (not secondaries or len(secondaries) == 0)
@@ -2414,6 +2424,7 @@ class GetMyProfileUseCase:
                     cluster_name=a.cluster_name,
                     affinity_score=a.affinity_score,
                     is_primary=False,
+                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
                     job_offer_count=a.job_offer_count,
@@ -2475,6 +2486,7 @@ class GetMyProfileUseCase:
                     cluster_name=a.cluster_name,
                     affinity_score=a.affinity_score,
                     is_primary=(primary and a.cluster_id == primary.cluster_id),
+                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
                     job_offer_count=a.job_offer_count,
