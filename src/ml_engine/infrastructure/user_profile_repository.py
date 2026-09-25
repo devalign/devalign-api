@@ -63,7 +63,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         self._session = session
 
     async def save(self, profile: UserProfile) -> UserProfile:
-        return await self.save_profile(profile)
+        return await self.save_profile(profile, persist_diagnostics=False)
 
     async def save_profile(
         self,
@@ -439,6 +439,84 @@ class SQLUserProfileRepository(UserProfileRepository):
             last_analysis_date=profile_model.updated_at,
             is_diagnosed=getattr(profile_model, "is_diagnosed", False),
         )
+
+    async def save_single_diagnostic(self, user_id: UUID, affinity: ClusterAffinity) -> None:
+        """Persists a single cluster diagnostic on-demand without touching other diagnostics."""
+        result = await self._session.execute(
+            select(ProfileModel).where(ProfileModel.user_id == user_id)
+        )
+        profile_model = result.scalar_one_or_none()
+        if not profile_model or not affinity.cluster_id:
+            return
+
+        existing = await self._session.execute(
+            select(DiagnosticModel).where(
+                DiagnosticModel.profile_id == profile_model.profile_id,
+                DiagnosticModel.detected_cluster_id == affinity.cluster_id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            return
+
+        all_skill_names: set[str] = set()
+        for s in affinity.detected_skills:
+            all_skill_names.add(s.name)
+        for g in affinity.skill_gaps:
+            all_skill_names.add(g.skill.name)
+
+        db_all_skills = {}
+        if all_skill_names:
+            db_skills_result = await self._session.execute(
+                select(SkillModel).where(SkillModel.name.in_(list(all_skill_names)))
+            )
+            db_all_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
+
+        for skill_name in all_skill_names:
+            norm_name = skill_name.lower()
+            if norm_name not in db_all_skills:
+                new_skill_model = SkillModel(
+                    skill_id=uuid4(),
+                    name=skill_name,
+                    status="pending_review",
+                    nature=SkillNature.TECH.value,
+                    weight=1.0,
+                    domain_tags=[],
+                    core_domains=[],
+                )
+                self._session.add(new_skill_model)
+                db_all_skills[norm_name] = new_skill_model
+
+        diagnostic_model = DiagnosticModel(
+            diagnostic_id=uuid4(),
+            profile_id=profile_model.profile_id,
+            detected_cluster_id=affinity.cluster_id,
+            affinity_score=affinity.affinity_score,
+        )
+        self._session.add(diagnostic_model)
+
+        for skill in affinity.detected_skills:
+            skill_model = db_all_skills[skill.name.lower()]
+            diag_skill = DiagnosticSkillModel(
+                diagnostic_skill_id=uuid4(),
+                diagnostic_id=diagnostic_model.diagnostic_id,
+                skill_id=skill_model.skill_id,
+                skill_status="consolidated",
+                importance_score=skill.frequency,
+            )
+            self._session.add(diag_skill)
+
+        for gap in affinity.skill_gaps:
+            skill_model = db_all_skills[gap.skill.name.lower()]
+            diag_skill = DiagnosticSkillModel(
+                diagnostic_skill_id=uuid4(),
+                diagnostic_id=diagnostic_model.diagnostic_id,
+                skill_id=skill_model.skill_id,
+                skill_status="gap",
+                importance_score=gap.skill.frequency,
+            )
+            self._session.add(diag_skill)
+
+        await self._session.flush()
 
     async def delete_by_user_id(self, user_id: UUID) -> None:
         await self._session.execute(delete(ProfileModel).where(ProfileModel.user_id == user_id))

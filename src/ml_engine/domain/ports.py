@@ -4,7 +4,13 @@ from abc import ABC, abstractmethod
 from typing import Any
 from uuid import UUID
 
-from src.ml_engine.domain.entities import Skill, SkillRelationType, TechCluster, UserProfile
+from src.ml_engine.domain.entities import (
+    ClusterAffinity,
+    Skill,
+    SkillRelationType,
+    TechCluster,
+    UserProfile,
+)
 
 
 class LLMService(ABC):
@@ -87,6 +93,11 @@ class UserProfileRepository(ABC):
     @abstractmethod
     async def get_by_user_id(self, user_id: UUID) -> UserProfile | None:
         """Retrieve the latest profile for a user."""
+        ...
+
+    @abstractmethod
+    async def save_single_diagnostic(self, user_id: UUID, affinity: ClusterAffinity) -> None:
+        """Persist a single cluster diagnostic on-demand without affecting others."""
         ...
 
     @abstractmethod

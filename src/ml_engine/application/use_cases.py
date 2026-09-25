@@ -2383,12 +2383,18 @@ class GetMyProfileUseCase:
             )
             if all_raw:
                 valid_aff = [a for a in all_raw if a.affinity_score > 0] or all_raw[:1]
-                top_aff = valid_aff[:3]
                 from dataclasses import replace as dc_replace_aff
 
                 if not primary or primary.cluster_name == "Sin Diagnóstico":
-                    primary = dc_replace_aff(top_aff[0], is_primary=True)
-                secondaries = [dc_replace_aff(a, is_primary=False) for a in top_aff[1:]]
+                    primary = dc_replace_aff(valid_aff[0], is_primary=True)
+                    secondaries = [dc_replace_aff(a, is_primary=False) for a in valid_aff[1:]]
+                else:
+                    secondaries = [
+                        dc_replace_aff(a, is_primary=False)
+                        for a in valid_aff
+                        if a.cluster_id != primary.cluster_id
+                        and a.cluster_name.lower() != primary.cluster_name.lower()
+                    ]
 
         all_affinities = (
             [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
@@ -2670,17 +2676,8 @@ class GetClusterDiagnosticUseCase:
 
         affinity = affinities[0]
 
-        # Lazy persistence: save evaluated cluster to secondary_affinities if not already present
-        existing_cluster_names = {a.cluster_name.lower() for a in profile.secondary_affinities}
-        if profile.primary_affinity and profile.primary_affinity.cluster_name:
-            existing_cluster_names.add(profile.primary_affinity.cluster_name.lower())
-
-        if requested_cluster.name.lower() not in existing_cluster_names:
-            from dataclasses import replace as dc_replace_profile
-
-            updated_secondaries = [*profile.secondary_affinities, affinity]
-            updated_profile = dc_replace_profile(profile, secondary_affinities=updated_secondaries)
-            await self._profiles.save(updated_profile)
+        # Lazy persistence: save evaluated cluster to database on-demand
+        await self._profiles.save_single_diagnostic(user_id, affinity)
 
         active_clusters = [c for c in active_clusters if c.centroid_skills]
         domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
