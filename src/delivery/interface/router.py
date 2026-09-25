@@ -310,7 +310,12 @@ async def run_profile_analysis_task(
 
             # Store extracted_data directly (without touching status)
             bg_logger.info("Storing extracted data", cv_id=str(cv_id))
-            rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
+            try:
+                rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
+            except Exception as e:
+                bg_logger.warning("Retrying update_extracted_data with rollback safeguard", error=str(e))
+                await session.rollback()
+                rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
             if rows == 0:
                 raise RuntimeError(f"Failed to update extracted_data for CV {cv_id}")
 

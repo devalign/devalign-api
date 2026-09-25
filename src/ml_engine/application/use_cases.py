@@ -513,6 +513,11 @@ class ProfileUserFromCVUseCase:
                     )
                 except Exception as exc:
                     logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
+                    if hasattr(self._skills, "_session") and self._skills._session is not None:
+                        try:
+                            await self._skills._session.rollback()
+                        except Exception as rollback_err:
+                            logger.debug("Rollback attempt completed", error=str(rollback_err))
 
             skills_list = extracted_data.get("skills", [])
             std_count = sum(
