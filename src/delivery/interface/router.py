@@ -313,7 +313,9 @@ async def run_profile_analysis_task(
             try:
                 rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
             except Exception as e:
-                bg_logger.warning("Retrying update_extracted_data with rollback safeguard", error=str(e))
+                bg_logger.warning(
+                    "Retrying update_extracted_data with rollback safeguard", error=str(e)
+                )
                 await session.rollback()
                 rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
             if rows == 0:

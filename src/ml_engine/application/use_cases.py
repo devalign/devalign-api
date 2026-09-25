@@ -1713,8 +1713,11 @@ def compute_affinities_and_domains(
         score = (0.85 * raw_coverage) + (0.15 * (raw_coverage * focus_ratio))
 
         import math
+
         expected_skills = 15.0
-        cluster_complexity_factor = min(1.0, math.log(len(cluster_tech_skills) + 1) / math.log(expected_skills + 1))
+        cluster_complexity_factor = min(
+            1.0, math.log(len(cluster_tech_skills) + 1) / math.log(expected_skills + 1)
+        )
         score *= cluster_complexity_factor
 
         domain_multiplier = _compute_domain_relevance_multiplier(
