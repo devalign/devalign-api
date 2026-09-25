@@ -223,8 +223,16 @@ class DeleteCVUseCase:
         if cv.user_id != user_id:
             raise AuthorizationError("You do not have permission to delete this CV")
 
-        # Delete from storage first
-        await self._storage.delete_cv(cv.storage_path)
+        # Delete from storage first (non-blocking for DB deletion)
+        try:
+            await self._storage.delete_cv(cv.storage_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to delete CV file from storage, continuing DB deletion",
+                cv_id=str(cv_id),
+                storage_path=cv.storage_path,
+                error=str(exc),
+            )
 
         # Delete from database (also clears profile references)
         await self._cvs.delete(cv.id)

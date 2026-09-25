@@ -16,7 +16,10 @@ from src.ml_engine.application.dtos import (
     SkillDTO,
     UserProfileDTO,
 )
-from src.ml_engine.application.skill_catalog_service import SkillCatalogService
+from src.ml_engine.application.skill_catalog_service import (
+    PROFILE_SKILL_BLACKLIST,
+    SkillCatalogService,
+)
 from src.ml_engine.domain.entities import (
     ClusterAffinity,
     SeniorityLevel,
@@ -211,6 +214,14 @@ class ProfileUserFromCVUseCase:
             use_llm_fallback=use_llm_fallback,
             existing_skills_cache=existing_skills_cache,
         )
+
+        # Filter out abstract meta-skills/categories from user profiles
+        resolved_skills = [
+            s
+            for s in resolved_skills
+            if s.name.lower().strip() not in PROFILE_SKILL_BLACKLIST
+            and s.normalized_name.lower().strip() not in PROFILE_SKILL_BLACKLIST
+        ]
 
         # Decorate resolved skills with their evidence details
         decorated_skills = []
@@ -411,10 +422,10 @@ class ProfileUserFromCVUseCase:
         Returns the parsed JSON dict from the LLM.
         """
         logger.info("Running combined LLM extraction")
-        cv_text_char_limit = 6000
+        cv_text_char_limit = 15000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=2000)
+        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=3000)
         parsed = _parse_cv_extraction_output(raw_output)
         if not parsed:
             raise ValueError("Empty extraction data parsed")
@@ -486,11 +497,18 @@ class ProfileUserFromCVUseCase:
             if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
                 raw_skills_count = len(extracted_data["skills"])
                 try:
+                    all_skills = await self._skills.get_all_skills()
+                    # Hybrid pipeline: Fast deterministic scan of raw CV text against canonical catalog
+                    direct_catalog_skills = await self._catalog.scan_text_for_catalog_skills(
+                        cv_text, existing_skills_cache=all_skills
+                    )
+                    combined_skills = list(extracted_data["skills"]) + direct_catalog_skills
+
                     extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
-                        extracted_data["skills"]
+                        combined_skills, existing_skills_cache=all_skills
                     )
                     logger.info(
-                        "Pre-normalized extracted skills against catalog",
+                        "Pre-normalized extracted skills against catalog (hybrid mode)",
                         count=len(extracted_data["skills"]),
                     )
                 except Exception as exc:
@@ -624,7 +642,9 @@ class ProfileUserFromCVUseCase:
                     message="Profile saved. Diagnosis skipped — no clusters configured.",
                 )
 
-            active_clusters = [c for c in clusters if c.centroid_skills]
+            active_clusters = [
+                c for c in clusters if c.centroid_skills and getattr(c, "tier", "standard") != "low"
+            ]
             if not active_clusters:
                 logger.warning(
                     "No active clusters with centroid skills — skipping Phase 2",
@@ -921,6 +941,7 @@ class ListClustersUseCase:
                 job_offer_count=c.job_offer_count,
             )
             for c in clusters
+            if getattr(c, "tier", "standard") != "low"
         ]
 
 
@@ -1027,13 +1048,13 @@ def _cluster_affinity_to_dto(
 
 
 def _build_combined_cv_extraction_prompt(cv_text: str) -> str:
-    """Build streamlined LLM prompt for core CV extraction.
+    """Build contextual LLM prompt for CV extraction.
 
-    Extracts job role, summary, years of experience, and exhaustive technical skills.
-    Normalizations and standard taxonomies are handled deterministically downstream
-    by Lightcast catalog matching in SkillCatalogService.
+    Instructs the LLM to analyze every section of the CV (experience, projects,
+    skills, education) for implicit and explicit technologies across all domains
+    including design, CMS, templating, and modern web tools.
     """
-    return f"""You are a CV parser. Analyze the text below.
+    return f"""You are an expert IT recruiter and CV parser. Analyze the CV text below.
 
 If the text is NOT a CV/resume, respond ONLY with:
 {{"error": "not_a_cv", "document_type": "<brief description>"}}
@@ -1041,16 +1062,41 @@ If the text is NOT a CV/resume, respond ONLY with:
 If it IS a CV, extract the core technical profile strictly following this JSON schema:
 {{
   "current_job_role": "string or null",
-  "professional_summary": "1-2 sentence technical summary or null",
+  "professional_summary": "1-2 sentence technical summary focusing on their primary domain and stack, or null",
   "years_experience": integer or null,
   "skills": ["string"]
 }}
 
 EXTRACTION RULES:
-- Skills: Extract an exhaustive list of all technical skills, programming languages, frameworks, databases, cloud services, tools, and methodologies mentioned. Exclude soft skills.
-- Split compound mentions into individual skills (e.g. "TypeScript/JavaScript" -> "TypeScript", "JavaScript").
-- Return clean canonical technology names without version numbers, proficiency adjectives, or action verbs.
-- Respond ONLY with the valid JSON object.
+1. EXHAUSTIVE EXTRACTION — Go through EVERY section (Skills list, Experience, Projects, Education, Certifications, Tools) and extract ALL concrete technical skills mentioned:
+   - Programming languages: JavaScript, TypeScript, Python, Java, C#, PHP, Go, Rust, Ruby, Dart, Kotlin, Swift, HTML, CSS, Sass, SCSS, etc.
+   - Frontend frameworks & libraries: React, React.js, Next.js, Gatsby, React Native, Vue.js, Angular, Ember, Backbone, Marionette, jQuery, Styled Components, Tailwind CSS, Bootstrap, etc.
+   - Backend frameworks & runtimes: Node.js, Express, Fastify, NestJS, Django, FastAPI, Flask, Spring Boot, Laravel, Ruby on Rails, ASP.NET, etc.
+   - CMS & E-commerce platforms: WordPress, Shopify, Strapi, Webflow, Drupal, Magento, etc.
+   - Static site generators & Templating / View engines: Eleventy (11ty), Timber, Twig, Nunjucks, Handlebars, Blade, Liquid, Pug, EJS, Astro, Hugo, etc.
+   - Design & Prototyping tools: Figma, Sketch, Adobe XD, Storybook, InVision, Zeplin, etc.
+   - Databases & Search: PostgreSQL, MongoDB, MySQL, Redis, Snowflake, Oracle, Elasticsearch, Algolia, Firebase, Supabase, etc.
+   - Cloud, Hosting & DevOps: AWS, GCP, Azure, Vercel, Netlify, Heroku, Docker, Kubernetes, Webpack, Vite, CI/CD, Git, GitHub, GitLab, etc.
+   - Testing & QA tools: Jest, Cypress, Playwright, Selenium, PyTest, Mocha, Vitest, etc.
+   - API tools & protocols: RESTful API, GraphQL, gRPC, Postman, OpenAPI, WebSockets, etc.
+
+2. MULTI-COLUMN & OCR RECOVERY:
+   - Carefully scan both columns, sidebars, bullet points, and project descriptions.
+   - If an OCR or text extraction artifact truncated a clear technology name (e.g. "jQuer" -> "jQuery", "Elevent" -> "Eleventy", "WordPres" -> "WordPress"), recover and extract the canonical technology name.
+
+3. IMPLICIT SKILL DETECTION:
+   - When a project or role description mentions using a technology without naming it in a dedicated "skills" section, still extract it. Example: "Built an embeddable player with MusicKit JS and Ember" -> extract "MusicKit JS", "Ember", "JavaScript".
+
+4. SPLIT compound mentions:
+   - "TypeScript/JavaScript" -> "TypeScript", "JavaScript"
+   - "HTML, CSS, Sass, JavaScript, and jQuery" -> extract all 5 individually.
+
+5. DO NOT extract:
+   - Abstract methodology categories (e.g. "Software Configuration Management", "Software Engineering", "Full Stack Development", "Front End Development", "Back End Development")
+   - Pure soft skills (e.g. "Leadership", "Communication", "Teamwork", "Problem Solving")
+   - Version numbers (extract "React" not "React 18", "ES6" can be extracted as "ES6" or "JavaScript")
+
+6. Return clean, canonical technology names. Respond ONLY with the valid JSON object.
 
 CV Text:
 {cv_text}"""
@@ -1066,6 +1112,18 @@ def _clean_and_unpack_skills(parsed: dict[str, Any]) -> dict[str, Any]:
 
     years_exp = parsed.get("years_experience")
     default_years = int(years_exp) if isinstance(years_exp, (int, float)) and years_exp > 0 else 1
+
+    # Common OCR / truncation correction map
+    ocr_corrections: dict[str, str] = {
+        "jquer": "jQuery",
+        "jquerp": "jQuery",
+        "jquery": "jQuery",
+        "wordpres": "WordPress",
+        "elevent": "Eleventy",
+        "11ty": "Eleventy",
+        "postgre": "PostgreSQL",
+        "kuberne": "Kubernetes",
+    }
 
     unpacked_skills: list[dict[str, Any]] = []
     seen_names: set[str] = set()
@@ -1099,6 +1157,21 @@ def _clean_and_unpack_skills(parsed: dict[str, Any]) -> dict[str, Any]:
 
         if not orig_name:
             continue
+
+        # Check OCR corrections
+        norm_key = orig_name.lower().strip()
+        if norm_key in ocr_corrections:
+            orig_name = ocr_corrections[norm_key]
+            item_dict["name"] = orig_name
+        elif norm_key.startswith("jquer") and len(norm_key) <= 8:
+            orig_name = "jQuery"
+            item_dict["name"] = orig_name
+        elif norm_key.startswith("elevent") and len(norm_key) <= 10:
+            orig_name = "Eleventy"
+            item_dict["name"] = orig_name
+        elif norm_key.startswith("wordpres") and len(norm_key) <= 11:
+            orig_name = "WordPress"
+            item_dict["name"] = orig_name
 
         # Check if the name has parentheses with items, e.g. "CI/CD (Bitbucket, Jenkins, GitHub Actions)"
         paren_match = re.search(r"^(.*?)\s*\((.*?)\)$", orig_name)
@@ -1415,6 +1488,96 @@ def normalize_domain_key(domain_str: str) -> list[str]:
     return [domain_str.strip().capitalize()]
 
 
+# --- Domain adjacency map and routing configuration ---
+DOMAIN_ADJACENCY: dict[str, set[str]] = {
+    "Frontend": {"Frontend", "Mobile"},
+    "Backend": {"Backend", "Frontend", "Data"},
+    "Mobile": {"Mobile", "Frontend"},
+    "DevOps": {"DevOps", "Cloud", "Backend"},
+    "Cloud": {"Cloud", "DevOps", "Backend"},
+    "Data": {"Data", "Backend", "Cloud"},
+    "QA": {"QA", "DevOps", "Backend"},
+    "Engineering": {"Backend", "Frontend", "DevOps"},
+    "Management": {"Backend", "Frontend", "DevOps", "Data"},
+}
+
+DOMAIN_RADAR_THRESHOLD = 0.35
+
+
+def _get_cluster_primary_domain(cluster: TechCluster) -> str | None:
+    """Determine the primary domain of a cluster from its top-weighted skills."""
+    domain_weights: dict[str, float] = {}
+    for skill in cluster.centroid_skills:
+        domains: list[str] = []
+        if skill.core_domains:
+            for d in skill.core_domains:
+                domains.extend(normalize_domain_key(d))
+        elif skill.domain_tags:
+            for d in skill.domain_tags:
+                domains.extend(normalize_domain_key(d))
+
+        for domain in domains:
+            domain_weights[domain] = domain_weights.get(domain, 0.0) + (
+                skill.weight * (skill.frequency or 1.0)
+            )
+
+    if not domain_weights:
+        return None
+    return max(domain_weights, key=lambda k: domain_weights[k])
+
+
+def _filter_affinities_by_domain(
+    affinities: list[ClusterAffinity],
+    active_clusters: list[TechCluster],
+    domain_scores: dict[str, float],
+) -> list[ClusterAffinity]:
+    """Filter affinities using the user's domain radar as primary gate.
+
+    Rules:
+    1. Compute the user's dominant domain from radar domain scores.
+    2. Always allow clusters whose primary domain is adjacent to dominant.
+    3. Allow non-adjacent domains ONLY if user's radar score for that domain exceeds DOMAIN_RADAR_THRESHOLD (35%).
+    """
+    if not domain_scores or not affinities:
+        return affinities
+
+    total = sum(domain_scores.values()) or 1.0
+    normalized_scores = {d: v / total for d, v in domain_scores.items()}
+
+    dominant_domain = max(normalized_scores, key=lambda k: normalized_scores[k])
+    adjacent_domains = DOMAIN_ADJACENCY.get(dominant_domain, {dominant_domain})
+
+    cluster_domain_map: dict[UUID, str | None] = {
+        c.id: _get_cluster_primary_domain(c) for c in active_clusters if c.id is not None
+    }
+
+    filtered = []
+    for aff in affinities:
+        cluster_domain = cluster_domain_map.get(aff.cluster_id) if aff.cluster_id else None
+        if cluster_domain is None:
+            filtered.append(aff)
+            continue
+
+        # Rule 1: Always allow adjacent domains
+        if cluster_domain in adjacent_domains:
+            filtered.append(aff)
+            continue
+
+        # Rule 2: Allow non-adjacent ONLY if user's radar score >= 35% in that domain
+        user_score_for_domain = normalized_scores.get(cluster_domain, 0.0)
+        if user_score_for_domain >= DOMAIN_RADAR_THRESHOLD:
+            logger.info(
+                "Non-adjacent domain allowed by radar threshold",
+                cluster=aff.cluster_name,
+                cluster_domain=cluster_domain,
+                user_radar_score=round(user_score_for_domain, 2),
+                threshold=DOMAIN_RADAR_THRESHOLD,
+            )
+            filtered.append(aff)
+
+    return filtered if filtered else affinities[:1]
+
+
 def compute_affinities_and_domains(
     detected_skills: list[Skill],
     active_clusters: list[TechCluster],
@@ -1542,26 +1705,13 @@ def compute_affinities_and_domains(
                 ai_insight=ai_insight,
                 detected_skills=cluster_detected_skills,
                 skill_gaps=cluster_skill_gaps,
+                job_offer_count=cluster.job_offer_count,
             )
         )
 
     affinities.sort(key=lambda a: (a.affinity_score, len(a.detected_skills)), reverse=True)
     if not affinities:
         return None, [], [], []
-
-    primary = affinities[0]
-    primary = ClusterAffinity(
-        cluster_id=primary.cluster_id,
-        cluster_name=primary.cluster_name,
-        affinity_score=primary.affinity_score,
-        is_primary=True,
-        market_insights=primary.market_insights,
-        compatible_roles=primary.compatible_roles,
-        ai_insight=primary.ai_insight,
-        detected_skills=primary.detected_skills,
-        skill_gaps=primary.skill_gaps,
-    )
-    secondaries = affinities[1:3]
 
     domain_scores = {}
     for s in detected_skills:
@@ -1573,6 +1723,35 @@ def compute_affinities_and_domains(
                     domain_scores[norm_d] += s.weight * (
                         s.frequency if s.frequency is not None else 1.0
                     )
+        elif s.domain_tags:
+            for d in s.domain_tags:
+                for norm_d in normalize_domain_key(d):
+                    if norm_d not in domain_scores:
+                        domain_scores[norm_d] = 0.0
+                    domain_scores[norm_d] += s.weight * (
+                        s.frequency if s.frequency is not None else 1.0
+                    )
+
+    # Filter affinities using user's domain radar as primary gate
+    filtered_affinities = _filter_affinities_by_domain(affinities, active_clusters, domain_scores)
+    if not filtered_affinities:
+        filtered_affinities = affinities
+
+    primary = filtered_affinities[0]
+    primary = ClusterAffinity(
+        cluster_id=primary.cluster_id,
+        cluster_name=primary.cluster_name,
+        affinity_score=primary.affinity_score,
+        is_primary=True,
+        market_insights=primary.market_insights,
+        compatible_roles=primary.compatible_roles,
+        ai_insight=primary.ai_insight,
+        detected_skills=primary.detected_skills,
+        skill_gaps=primary.skill_gaps,
+        job_offer_count=primary.job_offer_count,
+    )
+
+    secondaries = filtered_affinities[1:3]
 
     # Calcular promedios de demanda de mercado por dominio normalizado
     domain_demands_accum: dict[str, list[float]] = {}
@@ -1606,7 +1785,7 @@ def compute_affinities_and_domains(
     ]
     domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
 
-    return primary, secondaries, affinities, domain_affinities_dto
+    return primary, secondaries, filtered_affinities, domain_affinities_dto
 
 
 class GetKnowledgeGraphUseCase:
@@ -1987,7 +2166,11 @@ class GetMyProfileUseCase:
                 return None
 
         active_clusters = await self._clusters.get_all_active()
-        active_clusters = [c for c in active_clusters if c.centroid_skills]
+        active_clusters = [
+            c
+            for c in active_clusters
+            if c.centroid_skills and getattr(c, "tier", "standard") != "low"
+        ]
 
         domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
 
@@ -2033,6 +2216,8 @@ class GetMyProfileUseCase:
                     is_primary=False,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
+                    job_offer_count=a.job_offer_count,
+                    top_skills=a.top_skills,
                     detected_skills=[
                         SkillDTO(
                             name=s.name,
@@ -2092,6 +2277,8 @@ class GetMyProfileUseCase:
                     is_primary=(primary and a.cluster_id == primary.cluster_id),
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
+                    job_offer_count=a.job_offer_count,
+                    top_skills=a.top_skills,
                     detected_skills=[
                         SkillDTO(
                             name=s.name,
@@ -2299,7 +2486,12 @@ class GetClusterDiagnosticUseCase:
         p25_usd = float(raw_insights.get("salary_p25_usd") or (avg_usd * 0.75))
         p50_usd = float(raw_insights.get("salary_median_usd") or avg_usd)
         p75_usd = float(raw_insights.get("salary_p75_usd") or (avg_usd * 1.35))
-        total_demand = int(raw_insights.get("total_demand") or affinity.job_offer_count or 100)
+        total_demand = int(
+            raw_insights.get("total_demand")
+            or requested_cluster.job_offer_count
+            or affinity.job_offer_count
+            or 1
+        )
 
         seniority_val = (
             profile.seniority.value.lower()
@@ -2415,9 +2607,9 @@ class GetClusterDiagnosticUseCase:
             last_analysis_date=profile.last_analysis_date,
             cluster_name=affinity.cluster_name,
             affinity_score=affinity.affinity_score,
-            job_offer_count=affinity.job_offer_count,
+            job_offer_count=requested_cluster.job_offer_count or affinity.job_offer_count,
             top_skills=affinity.top_skills,
-            market_insights=affinity.market_insights,
+            market_insights=requested_cluster.market_insights or affinity.market_insights,
             compatible_roles=affinity.compatible_roles,
             ai_insight=affinity.ai_insight,
             salary_projection=salary_projection_dto,

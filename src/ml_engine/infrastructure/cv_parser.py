@@ -28,16 +28,29 @@ class LocalCVParserService(CVParserService):
     def _extract_from_pdf(self, content: bytes) -> str:
         """Extract text from a PDF file using pypdf."""
         try:
+            import re
+
             from pypdf import PdfReader
 
             reader = PdfReader(io.BytesIO(content))
             pages_text = []
             for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    pages_text.append(text)
+                # Use standard extraction which is stable across all PDF fonts
+                text = page.extract_text() or ""
 
-            full_text = "\n".join(pages_text)
+                # If standard extraction was empty, attempt layout mode fallback
+                if not text.strip():
+                    try:
+                        text = page.extract_text(extraction_mode="layout") or ""
+                    except Exception:
+                        text = ""
+
+                if text:
+                    # Clean soft-hyphens and broken line endings e.g. "microser-\nvices" -> "microservices"
+                    cleaned = re.sub(r"(\b\w+)-\s*\n\s*(\w+\b)", r"\1\2", text)
+                    pages_text.append(cleaned)
+
+            full_text = "\n\n".join(pages_text)
             logger.debug("PDF extracted", pages=len(reader.pages), chars=len(full_text))
             return full_text
         except Exception as exc:

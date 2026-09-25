@@ -450,11 +450,29 @@ def _compute_ict(
     years_of_experience: int,
     has_certification: bool,
 ) -> float:
-    exp_points = 3 * years_of_experience
-    cert_points = 4 if has_certification else 0
-    projects_points = 2 if personal_projects else 0
-    self_taught_points = 1 if self_taught else 0
-    return float(min(10.0, self_taught_points + projects_points + exp_points + cert_points))
+    """Compute ICT (Índice de Competencia Técnica) score (0.0 to 10.0).
+
+    - Experiencia Profesional: Max 5.0 pts (logarithmic diminishing returns)
+    - Código y Proyectos: Max 3.0 pts
+    - Formación y Certificaciones: Max 2.0 pts (Cursos +1.0, Certificación +2.0, cap 2.0)
+    """
+    if years_of_experience >= 5:
+        exp_points = 5.0
+    elif years_of_experience == 4:
+        exp_points = 4.7
+    elif years_of_experience == 3:
+        exp_points = 4.2
+    elif years_of_experience == 2:
+        exp_points = 3.5
+    elif years_of_experience == 1:
+        exp_points = 2.5
+    else:
+        exp_points = 0.0
+
+    projects_points = 3.0 if personal_projects else 0.0
+    training_points = min(2.0, (1.0 if self_taught else 0.0) + (2.0 if has_certification else 0.0))
+
+    return round(min(10.0, exp_points + projects_points + training_points), 1)
 
 
 @router.get(

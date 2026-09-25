@@ -13,6 +13,19 @@ logger = structlog.get_logger(__name__)
 
 SINGLE_SLASH_TERMS: set[str] = {"ci/cd", "tcp/ip", "i/o", "pl/sql", "client/server"}
 
+# Abstract meta-skills/categories valid for cluster centroids (market demand)
+# but prohibited on individual user profiles to prevent artificial affinity distortions.
+PROFILE_SKILL_BLACKLIST: frozenset[str] = frozenset(
+    {
+        "software configuration management",
+        "software engineering",
+        "full stack development",
+        "front end (software engineering)",
+        "back end (software engineering)",
+        "devops",
+    }
+)
+
 
 def build_skill_lookup_indexes(
     skills: list[Skill],
@@ -269,7 +282,86 @@ class SkillCatalogService:
             else:
                 dedup_map[norm_key] = processed_item
 
-        return list(dedup_map.values())
+        # Exclude blacklisted abstract meta-skills from Phase 1 UI output
+        filtered_items = [
+            item
+            for item in dedup_map.values()
+            if str(item.get("name", "")).strip().lower() not in PROFILE_SKILL_BLACKLIST
+        ]
+        return filtered_items
+
+    async def scan_text_for_catalog_skills(
+        self,
+        text: str,
+        existing_skills_cache: list[Skill] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fast deterministic scanner that searches for canonical skill names and aliases in raw CV text.
+
+        Ensures explicit technical keywords mentioned in the CV are never dropped by non-deterministic LLM omissions.
+        """
+        if not text or not text.strip():
+            return []
+
+        if existing_skills_cache is not None:
+            existing_skills = existing_skills_cache
+        else:
+            existing_skills = await self._skills.get_all_skills()
+
+        text_lower = text.lower()
+        matched_skills: dict[str, Skill] = {}
+
+        for skill in existing_skills:
+            # Check base name without parentheses (e.g. "React" from "React (JavaScript Framework)")
+            base_name = re.sub(r"\s*\(.*?\)\s*", "", skill.name).strip()
+            if not base_name or len(base_name) < 2:
+                continue
+
+            base_lower = base_name.lower()
+            if base_lower in PROFILE_SKILL_BLACKLIST:
+                continue
+
+            terms_to_search = [base_name] + [a for a in skill.aliases if a and len(a) >= 2]
+
+            found = False
+            for term in terms_to_search:
+                term_clean = term.strip()
+                term_lower = term_clean.lower()
+                if term_lower in PROFILE_SKILL_BLACKLIST:
+                    continue
+
+                if len(term_clean) <= 2:
+                    # For short acronyms / 2-char languages (e.g. C#, GO, JS, TS, R), use case-sensitive word boundary
+                    pattern = r"(?<!\w)" + re.escape(term_clean) + r"(?!\w)"
+                    if re.search(pattern, text):
+                        found = True
+                        break
+                elif len(term_clean) >= 3:
+                    # Case-insensitive word boundary match
+                    pattern = r"(?<!\w)" + re.escape(term_lower) + r"(?!\w)"
+                    if re.search(pattern, text_lower):
+                        found = True
+                        break
+
+            if found:
+                matched_skills[skill.name.lower()] = skill
+
+        results: list[dict[str, Any]] = []
+        for sk in matched_skills.values():
+            results.append(
+                {
+                    "name": sk.name,
+                    "category": "concept" if sk.nature == SkillNature.CONCEPT else "technical",
+                    "years_of_experience": 1,
+                    "self_taught": False,
+                    "personal_projects": False,
+                    "has_certification": False,
+                    "in_catalog": True,
+                    "is_custom": False,
+                }
+            )
+
+        logger.info("Deterministic catalog scan found skills in text", count=len(results))
+        return results
 
     async def resolve_skills(
         self,

@@ -87,4 +87,5 @@ class SQLClusterRepository(ClusterRepository):
             cluster_index=0,
             market_insights=model.market_insights,
             compatible_roles=model.compatible_roles,
+            tier=getattr(model, "tier", "standard") or "standard",
         )
