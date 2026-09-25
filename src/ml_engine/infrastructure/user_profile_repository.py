@@ -70,6 +70,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         profile: UserProfile,
         *,
         persist_diagnostics: bool = True,
+        persist_primary_only: bool = False,
     ) -> UserProfile:
         # 1. Check if profile exists
         result = await self._session.execute(
@@ -159,7 +160,11 @@ class SQLUserProfileRepository(UserProfileRepository):
             delete(DiagnosticModel).where(DiagnosticModel.profile_id == profile_model.profile_id)
         )
 
-        all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
+        if persist_primary_only:
+            all_affinities = [profile.primary_affinity] if profile.primary_affinity else []
+        else:
+            all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
+
         all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
 
         all_skill_names: set[str] = set()

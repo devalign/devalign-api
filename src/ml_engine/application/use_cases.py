@@ -800,16 +800,17 @@ class ProfileUserFromCVUseCase:
                     message="Profile saved. Could not compute cluster affinity.",
                 )
 
-            # Select Top 3 affinities with affinity_score > 0
+            # Rank all affinities with affinity_score > 0 (or all if none > 0)
             valid_affinities = [a for a in affinities_raw if a.affinity_score > 0]
             if not valid_affinities:
                 valid_affinities = affinities_raw[:1]
-            top_affinities = valid_affinities[:3]
 
             from dataclasses import replace as dc_replace_affinity
 
-            primary = dc_replace_affinity(top_affinities[0], is_primary=True)
-            secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
+            primary = dc_replace_affinity(valid_affinities[0], is_primary=True)
+            secondaries = [
+                dc_replace_affinity(a, is_primary=False) for a in valid_affinities[1:]
+            ]
 
             # Detect skill gaps vs primary cluster
             primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
@@ -840,12 +841,12 @@ class ProfileUserFromCVUseCase:
             high_gaps = sum(1 for g in skill_gaps if g.market_importance == "high")
             medium_gaps = sum(1 for g in skill_gaps if g.market_importance == "medium")
 
-            # Persist enriched profile with is_diagnosed=True and Top 3 affinities
+            # Persist enriched profile with is_diagnosed=True and Top 1 primary diagnostic
             logger.info(
-                "Phase 2 — persisting full diagnosis with Top 3 affinities",
+                "Phase 2 — persisting primary diagnosis with full ranking",
                 user_id=str(user_id),
                 primary=primary.cluster_name,
-                secondaries=[s.cluster_name for s in secondaries],
+                ranked_count=len(secondaries) + 1,
             )
             from dataclasses import replace as dc_replace_profile
 
@@ -859,7 +860,9 @@ class ProfileUserFromCVUseCase:
                 skill_gaps=skill_gaps,
                 is_diagnosed=True,
             )
-            await self._profiles.save(diagnosed_profile)
+            await self._profiles.save_profile(
+                diagnosed_profile, persist_diagnostics=True, persist_primary_only=True
+            )
 
             # Record telemetry metrics for thesis evaluation
             total_skills = len(detected_skills)
@@ -2666,6 +2669,19 @@ class GetClusterDiagnosticUseCase:
             raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
 
         affinity = affinities[0]
+
+        # Lazy persistence: save evaluated cluster to secondary_affinities if not already present
+        existing_cluster_names = {a.cluster_name.lower() for a in profile.secondary_affinities}
+        if profile.primary_affinity and profile.primary_affinity.cluster_name:
+            existing_cluster_names.add(profile.primary_affinity.cluster_name.lower())
+
+        if requested_cluster.name.lower() not in existing_cluster_names:
+            from dataclasses import replace as dc_replace_profile
+
+            updated_secondaries = [*profile.secondary_affinities, affinity]
+            updated_profile = dc_replace_profile(profile, secondary_affinities=updated_secondaries)
+            await self._profiles.save(updated_profile)
+
         active_clusters = [c for c in active_clusters if c.centroid_skills]
         domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
 

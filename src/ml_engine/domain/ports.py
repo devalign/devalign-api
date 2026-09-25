@@ -79,8 +79,9 @@ class UserProfileRepository(ABC):
         profile: UserProfile,
         *,
         persist_diagnostics: bool = True,
+        persist_primary_only: bool = False,
     ) -> UserProfile:
-        """Persist a profile snapshot, optionally skipping diagnostics."""
+        """Persist a profile snapshot, optionally skipping diagnostics or persisting only primary."""
         return await self.save(profile)
 
     @abstractmethod
