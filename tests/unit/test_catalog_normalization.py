@@ -154,3 +154,28 @@ async def test_normalize_extracted_skills_fuzzy_matching_and_suggestion(mock_cat
     assert "FastAPIJS" in norm_map
     assert norm_map["FastAPIJS"]["is_custom"] is True
     assert norm_map["FastAPIJS"]["suggested_canonical"] == "FastAPI"
+
+
+@pytest.mark.asyncio
+async def test_scan_text_for_catalog_skills(mock_catalog_skills):
+    mock_repo = AsyncMock()
+    mock_repo.get_all_skills.return_value = mock_catalog_skills
+    mock_llm = AsyncMock()
+
+    service = SkillCatalogService(mock_repo, mock_llm)
+
+    cv_raw_text = """
+    Brittany Chiang
+    Experienced engineer.
+    Built high-performance applications using MongoDB for document storage and NoSQL design.
+    """
+
+    results = await service.scan_text_for_catalog_skills(
+        cv_raw_text, existing_skills_cache=mock_catalog_skills
+    )
+
+    detected_names = {item["name"] for item in results}
+
+    assert "MongoDB" in detected_names
+    assert "NoSQL" in detected_names
+    assert "FastAPI" not in detected_names

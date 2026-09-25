@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -20,6 +21,8 @@ from src.ml_engine.infrastructure.models import (
     SkillModel,
     SkillRelationModel,
 )
+
+logger = structlog.get_logger(__name__)
 
 
 def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> Skill:
@@ -145,8 +148,16 @@ class SQLSkillRepository(SkillRepository):
             # Note: Relations are persisted separately via add_relations()
             models.append(model)
 
-        self._session.add_all(models)
-        await self._session.flush()
+        try:
+            async with self._session.begin_nested():
+                self._session.add_all(models)
+                await self._session.flush()
+        except Exception as exc:
+            logger.warning(
+                "Could not flush new skills (likely concurrent or constraint conflict)",
+                error=str(exc),
+            )
+            return []
 
         # Map saved models back to domain entities with populated IDs
         saved_skills = []
@@ -205,5 +216,12 @@ class SQLSkillRepository(SkillRepository):
                 )
 
         if new_models:
-            self._session.add_all(new_models)
-            await self._session.flush()
+            try:
+                async with self._session.begin_nested():
+                    self._session.add_all(new_models)
+                    await self._session.flush()
+            except Exception as exc:
+                logger.warning(
+                    "Could not flush new skill relations",
+                    error=str(exc),
+                )

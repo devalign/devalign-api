@@ -76,3 +76,66 @@ def test_compute_affinities_and_domains_uses_core_domains():
     assert round(domain_map["Frontend"], 4) == 0.2727
     assert round(domain_map["Backend"], 4) == 0.3636
     assert round(domain_map["Data"], 4) == 0.3636
+
+
+def test_compute_affinities_and_domains_filters_non_canonical_domains():
+    user_skill = Skill(
+        id=uuid4(),
+        name="Scrum",
+        nature=SkillNature.TECH,
+        normalized_name="scrum",
+        domain_tags=["engineering", "management", "software_engineering", "security"],
+        core_domains=[],
+        weight=2.0,
+        frequency=1.0,
+    )
+
+    cluster = TechCluster(
+        id=uuid4(),
+        name="General Tech",
+        description="General tech",
+        centroid_skills=[],
+        job_offer_count=10,
+        cluster_index=0,
+    )
+
+    _primary, _secondaries, _affinities, domain_affinities = compute_affinities_and_domains(
+        [user_skill], [cluster]
+    )
+
+    domains = [d.domain for d in domain_affinities]
+    assert "Engineering" not in domains
+    assert "Management" not in domains
+    assert "Software_engineering" not in domains
+    assert "Security" not in domains
+
+
+def test_compute_affinities_and_domains_normalizes_market_demand_bound():
+    centroid_skill = Skill(
+        id=uuid4(),
+        name="Flutter",
+        nature=SkillNature.TECH,
+        normalized_name="flutter",
+        domain_tags=["mobile"],
+        core_domains=["Mobile"],
+        weight=2.5,
+        frequency=2.37,  # Unnormalized raw importance score
+    )
+
+    cluster = TechCluster(
+        id=uuid4(),
+        name="Mobile Flutter",
+        description="Mobile cluster",
+        centroid_skills=[centroid_skill],
+        job_offer_count=20,
+        cluster_index=0,
+    )
+
+    _primary, _secondaries, _affinities, domain_affinities = compute_affinities_and_domains(
+        [], [cluster]
+    )
+
+    mobile_affinity = next((d for d in domain_affinities if d.domain == "Mobile"), None)
+    assert mobile_affinity is not None
+    assert 0.0 <= mobile_affinity.market_demand <= 1.0
+    assert mobile_affinity.market_demand <= 0.98

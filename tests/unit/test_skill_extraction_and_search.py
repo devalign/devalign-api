@@ -155,3 +155,25 @@ def test_cluster_affinity_to_dto_mapping():
     assert len(dto.skill_gaps) == 1
     assert dto.skill_gaps[0].name == "Spring Boot"
     assert dto.skill_gaps[0].market_importance == "high"
+
+
+def test_clean_and_unpack_ocr_recovery():
+    """Verify that OCR-truncated skill names (e.g. 'jQuer', 'wordpres', '11ty') are recovered."""
+    raw_payload = {
+        "skills": [
+            "jQuer",
+            "wordpres",
+            "elevent",
+            "11ty",
+            "Figma",
+            "Timber",
+        ]
+    }
+    result = _clean_and_unpack_skills(raw_payload)
+    names = [s["name"] for s in result["skills"]]
+
+    assert "jQuery" in names
+    assert "WordPress" in names
+    assert "Eleventy" in names
+    assert "Figma" in names
+    assert "Timber" in names

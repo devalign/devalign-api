@@ -128,6 +128,7 @@ class TechCluster:
     cluster_index: int  # K-Prototypes cluster number
     market_insights: dict[str, Any] = field(default_factory=dict)
     compatible_roles: list[dict[str, Any]] = field(default_factory=list)
+    tier: str = "standard"  # "high" | "standard" | "low"
 
 
 @dataclass(frozen=True)

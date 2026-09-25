@@ -195,7 +195,11 @@ class ClusterModel(Base):
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     job_offer_count: Mapped[int] = mapped_column(nullable=False, server_default="0")
+    tier: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="standard", index=True
+    )  # "high" | "standard" | "low"
     # pgvector column — centroid of all embeddings in this cluster
+
     # Dimensioned for all-MiniLM-L6-v2 (384 dims)
     centroid_vec: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM), nullable=True)
     compatible_roles: Mapped[list[dict[str, Any]]] = mapped_column(

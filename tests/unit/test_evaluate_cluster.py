@@ -91,5 +91,5 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
     assert len(saved_profile.secondary_affinities) == 1
     assert saved_profile.secondary_affinities[0].cluster_name == cluster_name
     assert (
-        saved_profile.secondary_affinities[0].affinity_score == 1.0
-    )  # Since user has Java and cluster has Java
+        saved_profile.secondary_affinities[0].affinity_score == 0.25
+    )  # Since user has Java and cluster has Java, but cluster only has 1 skill (log(2)/log(16) = 0.25 penalty)
