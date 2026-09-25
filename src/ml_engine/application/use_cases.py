@@ -1,5 +1,6 @@
 """ML Engine use cases."""
 
+import asyncio
 import json
 from collections import deque
 from dataclasses import replace as dc_replace
@@ -83,6 +84,27 @@ _CV_SECTION_KEYWORDS: frozenset[str] = frozenset(
     }
 )
 
+_NON_CV_INDICATORS: frozenset[str] = frozenset(
+    {
+        "ejercicios",
+        "laboratorio",
+        "cuestionario",
+        "factura",
+        "recibo",
+        "boleta",
+        "silabo",
+        "sílabo",
+        "examen",
+        "parcial",
+        "homework",
+        "invoice",
+        "receipt",
+        "syllabus",
+        "guía de práctica",
+        "guia de practica",
+    }
+)
+
 
 CONCEPT_PATTERNS: tuple[str, ...] = (
     "back end",
@@ -109,9 +131,18 @@ def is_concept_skill(skill: Any) -> bool:
 
 
 def _looks_like_a_cv(text: str) -> bool:
-    """Quick heuristic: does the text contain CV-like section headers?"""
+    """Quick heuristic: does the text contain CV-like section headers and structure?"""
     text_lower = text.lower()
+    words = text_lower.split()
+    if len(words) < 25:
+        return False
+
+    non_cv_matches = sum(1 for kw in _NON_CV_INDICATORS if kw in text_lower)
     section_matches = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in text_lower)
+
+    if non_cv_matches >= 2 and section_matches < 2:
+        return False
+
     return section_matches >= 2
 
 
@@ -167,15 +198,44 @@ class ProfileUserFromCVUseCase:
     async def _classify_as_cv(self, text: str) -> tuple[bool, float]:
         """Determine if the extracted text is actually a CV/resume.
 
-        Uses a fast heuristic only. The structured extraction step already has
-        an explicit ``not_a_cv`` guard, so we avoid a second LLM round-trip on
-        the hot path.
+        Uses a fast multi-layer heuristic. If the document is obviously not a CV,
+        returns (False, 0.0) to abort before expensive LLM calls.
 
         Returns (is_cv, confidence).
         """
-        if _looks_like_a_cv(text):
-            logger.debug("CV heuristic passed — document looks like a CV")
-            return True, 0.8
+        text_lower = text.lower()
+        words = text_lower.split()
+        if len(words) < 25:
+            return False, 0.0
+
+        non_cv_matches = sum(1 for kw in _NON_CV_INDICATORS if kw in text_lower)
+        section_matches = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in text_lower)
+
+        if non_cv_matches >= 2 and section_matches < 2:
+            logger.info(
+                "Document identified as non-CV by keyword heuristic",
+                non_cv_matches=non_cv_matches,
+            )
+            return False, 0.1
+
+        if section_matches >= 2:
+            logger.debug(
+                "CV heuristic passed — document looks like a CV",
+                section_matches=section_matches,
+            )
+            return True, 0.85
+
+        if section_matches == 1 and len(words) >= 50:
+            logger.debug(
+                "CV heuristic weak pass — continuing to extraction",
+                section_matches=section_matches,
+            )
+            return True, 0.6
+
+        # Zero section matches and short or ambiguous text
+        if section_matches == 0 and len(words) < 80:
+            logger.info("Document rejected early — no CV section headers found")
+            return False, 0.2
 
         logger.info("CV heuristic inconclusive, continuing with structured extraction")
         return True, 0.5
@@ -416,7 +476,7 @@ class ProfileUserFromCVUseCase:
         return list(inferred_skills.values())
 
     async def _combined_llm_extraction(self, cv_text: str) -> dict[str, Any]:
-        """Single streamlined LLM call for core CV extraction.
+        """Single streamlined LLM call for core CV extraction with timeout safeguard.
 
         Extracts: current job role, technical summary, years of experience,
         and exhaustive technical skills list in one prompt.
@@ -427,7 +487,18 @@ class ProfileUserFromCVUseCase:
         cv_text_char_limit = 15000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=3000)
+
+        try:
+            raw_output = await asyncio.wait_for(
+                self._llm.generate(prompt=prompt, context=[], max_tokens=3000),
+                timeout=45.0,
+            )
+        except TimeoutError as exc:
+            logger.error("LLM extraction timed out after 45 seconds")
+            raise MLPipelineError(
+                "LLM extraction timed out after 45s. Please retry or upload a shorter document."
+            ) from exc
+
         parsed = _parse_cv_extraction_output(raw_output)
         if not parsed:
             raise ValueError("Empty extraction data parsed")
@@ -466,22 +537,31 @@ class ProfileUserFromCVUseCase:
             },
         ) as parse_tracker:
             cv_text = await self._cv_parser.extract_text(cv_content, content_type)
+            words = cv_text.split()
             parse_tracker.add_metadata(
                 {
                     "char_count": len(cv_text),
-                    "word_count": len(cv_text.split()),
+                    "word_count": len(words),
                 }
             )
 
-        if not cv_text.strip():
-            raise MLPipelineError("CV text extraction returned empty content")
+            if not cv_text.strip():
+                raise MLPipelineError("CV text extraction returned empty content")
 
-        is_cv, confidence = await self._classify_as_cv(cv_text)
-        if not is_cv:
-            raise MLPipelineError(
-                "The uploaded document does not appear to be a professional CV/resume. "
-                "Please upload a document with your work experience, education, and skills."
-            )
+            if len(words) < 25:
+                raise MLPipelineError(
+                    "The uploaded document is too short to be a valid CV/resume. "
+                    "Please upload a complete document with your work experience, education, and skills."
+                )
+
+            is_cv, confidence = await self._classify_as_cv(cv_text)
+            if not is_cv:
+                raise MLPipelineError(
+                    "The uploaded document does not appear to be a professional CV/resume. "
+                    "Please upload a document with your work experience, education, and skills."
+                )
+            parse_tracker.add_metadata({"classification_confidence": confidence})
+
         logger.debug("Document classified as CV", confidence=confidence)
 
         async with TelemetryTracker(

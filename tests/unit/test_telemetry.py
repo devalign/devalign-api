@@ -62,12 +62,27 @@ async def test_record_telemetry_event_fail_safe() -> None:
     broken_session.add = MagicMock()
     broken_session.commit.side_effect = RuntimeError("Database connection lost")
 
-    # Should catch error, log warning, and return None without raising
-    result = await record_telemetry_event(
-        event_type="test_error",
-        session=broken_session,
-    )
-    assert result is None
+    broken_local = AsyncMock()
+    broken_local.add = MagicMock()
+    broken_local.commit.side_effect = RuntimeError("Local connection lost")
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = broken_local
+    session_ctx.__aexit__.return_value = None
+
+    import src.shared.telemetry.tracker as tracker_mod
+
+    orig_session_factory = tracker_mod.AsyncSessionLocal
+    tracker_mod.AsyncSessionLocal = MagicMock(return_value=session_ctx)  # type: ignore[misc]
+
+    try:
+        # Should catch error, log warning, and return None without raising
+        result = await record_telemetry_event(
+            event_type="test_error",
+            session=broken_session,
+        )
+        assert result is None
+    finally:
+        tracker_mod.AsyncSessionLocal = orig_session_factory
 
 
 @pytest.mark.asyncio
@@ -332,3 +347,84 @@ async def test_export_telemetry_to_csv_with_data(tmp_path: pytest.TempPathFactor
         assert "Backend Python" in content[1]
     finally:
         export_mod.AsyncSessionLocal = orig_session
+
+
+@pytest.mark.asyncio
+async def test_record_telemetry_event_isolated_session_fallback_on_error() -> None:
+    """record_telemetry_event falls back to isolated session if provided session fails to commit."""
+    broken_session = AsyncMock()
+    broken_session.add = MagicMock()
+    broken_session.commit.side_effect = RuntimeError("Transaction aborted")
+    broken_session.rollback = AsyncMock()
+
+    local_session = AsyncMock()
+    local_session.add = MagicMock()
+    local_session.commit = AsyncMock()
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = local_session
+    session_ctx.__aexit__.return_value = None
+
+    import src.shared.telemetry.tracker as tracker_mod
+
+    orig_session_factory = tracker_mod.AsyncSessionLocal
+    tracker_mod.AsyncSessionLocal = MagicMock(return_value=session_ctx)  # type: ignore[misc]
+
+    try:
+        event = await record_telemetry_event(
+            event_type="test_fallback",
+            session=broken_session,
+        )
+        assert event is not None
+        assert event.event_type == "test_fallback"
+        broken_session.rollback.assert_awaited_once()
+        local_session.add.assert_called_once_with(event)
+        local_session.commit.assert_awaited_once()
+    finally:
+        tracker_mod.AsyncSessionLocal = orig_session_factory
+
+
+def test_cv_heuristic_non_cv_rejection() -> None:
+    """_looks_like_a_cv returns False for obvious homework assignments or invoices."""
+    from src.ml_engine.application.use_cases import _looks_like_a_cv
+
+    non_cv_text = (
+        "Universidad Nacional de Ingeniería. Ejercicios prácticos de laboratorio de base de datos. "
+        "Pregunta 1: Crear índices para la tabla productos. Pregunta 2: Optimizar consultas SQL. "
+        "Guía de práctica calificada ciclo 2026-I."
+    )
+    assert not _looks_like_a_cv(non_cv_text)
+
+    short_text = "Hello world this is a short test"
+    assert not _looks_like_a_cv(short_text)
+
+    valid_cv_text = (
+        "Jack Arana Ramos - Senior Software Engineer\n"
+        "Professional Summary: Experienced backend developer specialized in Python, FastAPI, Postgres.\n"
+        "Work Experience:\n"
+        "- Software Engineer at Tech Corp (2022 - Present): Designed scalable microservices.\n"
+        "Education:\n"
+        "- B.S. in Computer Science (2018 - 2022)\n"
+        "Technical Skills: Python, FastAPI, Docker, PostgreSQL, Redis, CI/CD."
+    )
+    assert _looks_like_a_cv(valid_cv_text)
+
+
+@pytest.mark.asyncio
+async def test_combined_llm_extraction_timeout() -> None:
+    """_combined_llm_extraction raises MLPipelineError when LLM exceeds timeout."""
+    from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
+    from src.shared.exceptions import MLPipelineError
+
+    mock_llm = MagicMock()
+    mock_llm.generate = AsyncMock(side_effect=TimeoutError("Request timed out"))
+
+    use_case = ProfileUserFromCVUseCase(
+        cv_parser=MagicMock(),
+        cluster_repository=MagicMock(),
+        profile_repository=MagicMock(),
+        llm_service=mock_llm,
+        skill_repository=MagicMock(),
+    )
+
+    with pytest.raises(MLPipelineError, match="LLM extraction timed out"):
+        await use_case._combined_llm_extraction("Short CV text with enough characters to prompt.")
