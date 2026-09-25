@@ -495,15 +495,17 @@ class ProfileUserFromCVUseCase:
             extracted_data = await self._combined_llm_extraction(cv_text)
 
             # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
-            raw_skills_count = 0
+            raw_llm_skills_count = 0
+            direct_catalog_skills_count = 0
             if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
-                raw_skills_count = len(extracted_data["skills"])
+                raw_llm_skills_count = len(extracted_data["skills"])
                 try:
                     all_skills = await self._skills.get_all_skills()
                     # Hybrid pipeline: Fast deterministic scan of raw CV text against canonical catalog
                     direct_catalog_skills = await self._catalog.scan_text_for_catalog_skills(
                         cv_text, existing_skills_cache=all_skills
                     )
+                    direct_catalog_skills_count = len(direct_catalog_skills)
                     combined_skills = list(extracted_data["skills"]) + direct_catalog_skills
 
                     extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
@@ -512,6 +514,8 @@ class ProfileUserFromCVUseCase:
                     logger.info(
                         "Pre-normalized extracted skills against catalog (hybrid mode)",
                         count=len(extracted_data["skills"]),
+                        llm_count=raw_llm_skills_count,
+                        direct_scanned_count=direct_catalog_skills_count,
                     )
                 except Exception as exc:
                     logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
@@ -532,7 +536,15 @@ class ProfileUserFromCVUseCase:
 
             llm_tracker.add_metadata(
                 {
-                    "raw_skills_count": raw_skills_count,
+                    "raw_skills_count": raw_llm_skills_count,
+                    "llm_skills_count": raw_llm_skills_count,
+                    "direct_catalog_skills_count": direct_catalog_skills_count,
+                    "hybrid_total_extracted": total_extracted,
+                    "hybrid_boost_ratio": (
+                        round(direct_catalog_skills_count / total_extracted, 4)
+                        if total_extracted > 0
+                        else 0.0
+                    ),
                     "total_skills_phase1": total_extracted,
                     "standard_skills_phase1": std_count,
                     "custom_skills_phase1": custom_count,
@@ -572,8 +584,43 @@ class ProfileUserFromCVUseCase:
 
         seniority = profile.seniority
 
+        # If validated_skills provided, convert to raw_skills format
+        if validated_skills is not None:
+            raw_skills = [
+                {
+                    "name": s.name,
+                    "category": s.skill_type,
+                    "years_of_experience": s.years_of_experience or 0,
+                    "personal_projects": s.personal_projects or False,
+                    "has_certification": s.has_certification or False,
+                    "is_custom": getattr(s, "is_custom", False),
+                }
+                for s in validated_skills
+            ]
+        else:
+            # Use whatever raw data is available from the existing profile
+            extracted_data_skills = []
+            for s in profile.detected_skills:
+                extracted_data_skills.append(
+                    {
+                        "name": s.name,
+                        "category": s.nature.value if s.nature else "technical",
+                        "years_of_experience": s.years_of_experience or 0,
+                        "personal_projects": s.personal_projects or False,
+                        "has_certification": s.has_certification or False,
+                        "is_custom": getattr(s, "is_custom", False),
+                    }
+                )
+            raw_skills = extracted_data_skills if extracted_data_skills else []
+
+        # Embedding (static zero-vector for backwards compatibility)
+        cv_embedding = [0.0] * 1024
+
+        all_skills = await self._skills.get_all_skills()
+
+        # Step 1: Normalization Telemetry Tracker
         async with TelemetryTracker(
-            "diagnosis_phase2",
+            "skill_normalization",
             user_id=user_id,
             initial_metadata={
                 "cv_id": str(cv_id),
@@ -582,49 +629,34 @@ class ProfileUserFromCVUseCase:
                 if validated_skills is not None
                 else 0,
             },
-        ) as diag_tracker:
-            # If validated_skills provided, convert to raw_skills format
-            if validated_skills is not None:
-                raw_skills = [
-                    {
-                        "name": s.name,
-                        "category": s.skill_type,
-                        "years_of_experience": s.years_of_experience or 0,
-                        "personal_projects": s.personal_projects or False,
-                        "has_certification": s.has_certification or False,
-                        "is_custom": getattr(s, "is_custom", False),
-                    }
-                    for s in validated_skills
-                ]
-            else:
-                # Use whatever raw data is available from the existing profile
-                extracted_data_skills = []
-                for s in profile.detected_skills:
-                    extracted_data_skills.append(
-                        {
-                            "name": s.name,
-                            "category": s.nature.value if s.nature else "technical",
-                            "years_of_experience": s.years_of_experience or 0,
-                            "personal_projects": s.personal_projects or False,
-                            "has_certification": s.has_certification or False,
-                            "is_custom": getattr(s, "is_custom", False),
-                        }
-                    )
-                raw_skills = extracted_data_skills if extracted_data_skills else []
-
-            # Embedding (static zero-vector for backwards compatibility)
-            cv_embedding = [0.0] * 1024
-
-            # Normalize user skills against the canonical catalog
+        ) as norm_tracker:
             logger.info("Phase 2 — normalising skills", user_id=str(user_id))
-            all_skills = await self._skills.get_all_skills()
             detected_skills = await self._normalize_user_skills(
                 raw_skills,
                 use_llm_fallback=False,
                 existing_skills_cache=all_skills,
                 seniority=seniority,
             )
+            total_norm = len(detected_skills)
+            std_count = sum(1 for s in detected_skills if not getattr(s, "is_custom", False))
+            custom_count = sum(1 for s in detected_skills if getattr(s, "is_custom", False))
+            norm_tracker.add_metadata(
+                {
+                    "total_skills": total_norm,
+                    "standard_skills": std_count,
+                    "custom_skills": custom_count,
+                    "standardization_ratio": (
+                        round(std_count / total_norm, 4) if total_norm > 0 else 0.0
+                    ),
+                }
+            )
 
+        # Step 2: Knowledge Graph Inference & Cluster Affinity Telemetry Tracker
+        async with TelemetryTracker(
+            "graph_and_affinity",
+            user_id=user_id,
+            initial_metadata={"cv_id": str(cv_id)},
+        ) as graph_tracker:
             # Upward inference on the skill graph
             detected_skills = await self._expand_with_upward_inference(
                 detected_skills,
@@ -638,7 +670,7 @@ class ProfileUserFromCVUseCase:
                     "No tech clusters available — skipping Phase 2 diagnosis",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_clusters_available"})
+                graph_tracker.add_metadata({"status_detail": "no_clusters_available"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -657,7 +689,7 @@ class ProfileUserFromCVUseCase:
                     "No active clusters with centroid skills — skipping Phase 2",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_active_clusters_with_centroids"})
+                graph_tracker.add_metadata({"status_detail": "no_active_clusters_with_centroids"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -677,7 +709,7 @@ class ProfileUserFromCVUseCase:
                     "No cluster affinities — skipping Phase 2",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_cluster_affinities_computed"})
+                graph_tracker.add_metadata({"status_detail": "no_cluster_affinities_computed"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -724,6 +756,10 @@ class ProfileUserFromCVUseCase:
                         skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
                 skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
+            critical_gaps = sum(1 for g in skill_gaps if g.market_importance == "critical")
+            high_gaps = sum(1 for g in skill_gaps if g.market_importance == "high")
+            medium_gaps = sum(1 for g in skill_gaps if g.market_importance == "medium")
+
             # Persist enriched profile with is_diagnosed=True and Top 3 affinities
             logger.info(
                 "Phase 2 — persisting full diagnosis with Top 3 affinities",
@@ -747,27 +783,23 @@ class ProfileUserFromCVUseCase:
 
             # Record telemetry metrics for thesis evaluation
             total_skills = len(detected_skills)
-            std_count = sum(1 for s in detected_skills if not getattr(s, "is_custom", False))
-            custom_count = sum(1 for s in detected_skills if getattr(s, "is_custom", False))
             inferred_count = sum(
                 1 for s in detected_skills if len(getattr(s, "inferred_from", [])) > 0
             )
 
-            diag_tracker.add_metadata(
+            graph_tracker.add_metadata(
                 {
                     "total_skills": total_skills,
-                    "standard_skills": std_count,
-                    "custom_skills": custom_count,
                     "inferred_skills": inferred_count,
-                    "standardization_ratio": (
-                        round(std_count / total_skills, 4) if total_skills > 0 else 0.0
-                    ),
                     "inference_ratio": (
                         round(inferred_count / total_skills, 4) if total_skills > 0 else 0.0
                     ),
                     "primary_cluster": primary.cluster_name,
                     "affinity_score": round(primary.affinity_score, 4),
-                    "gaps_count": len(skill_gaps),
+                    "total_gaps_count": len(skill_gaps),
+                    "critical_gaps_count": critical_gaps,
+                    "high_gaps_count": high_gaps,
+                    "medium_gaps_count": medium_gaps,
                     "seniority": seniority.value,
                 }
             )

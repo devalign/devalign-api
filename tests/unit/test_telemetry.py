@@ -141,3 +141,194 @@ async def test_telemetry_tracker_suppress_exception() -> None:
     assert tracker.event is not None
     assert tracker.event.status == "error"
     assert "Missing optional key" in (tracker.event.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tracker_hybrid_extraction_metadata() -> None:
+    """TelemetryTracker records hybrid extraction metrics properly."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    uid = uuid4()
+
+    tracker = TelemetryTracker(
+        event_type="llm_extraction_phase1",
+        user_id=uid,
+        session=session,
+        initial_metadata={"cv_id": "cv-456", "classification_confidence": 0.98},
+    )
+
+    async with tracker:
+        tracker.add_metadata(
+            {
+                "raw_skills_count": 12,
+                "llm_skills_count": 12,
+                "direct_catalog_skills_count": 4,
+                "hybrid_total_extracted": 16,
+                "hybrid_boost_ratio": 0.25,
+                "total_skills_phase1": 16,
+                "standard_skills_phase1": 14,
+                "custom_skills_phase1": 2,
+                "standardization_ratio_phase1": 0.875,
+            }
+        )
+
+    assert tracker.event is not None
+    assert tracker.event.event_type == "llm_extraction_phase1"
+    meta = tracker.event.metadata_
+    assert meta["llm_skills_count"] == 12
+    assert meta["direct_catalog_skills_count"] == 4
+    assert meta["hybrid_boost_ratio"] == 0.25
+    assert meta["standardization_ratio_phase1"] == 0.875
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tracker_skill_normalization() -> None:
+    """TelemetryTracker records skill_normalization event and standardization ratio."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    uid = uuid4()
+
+    tracker = TelemetryTracker(
+        event_type="skill_normalization",
+        user_id=uid,
+        session=session,
+        initial_metadata={"cv_id": "cv-789", "validated_skills_count": 10},
+    )
+
+    async with tracker:
+        tracker.add_metadata(
+            {
+                "total_skills": 10,
+                "standard_skills": 8,
+                "custom_skills": 2,
+                "standardization_ratio": 0.8,
+            }
+        )
+
+    assert tracker.event is not None
+    assert tracker.event.event_type == "skill_normalization"
+    assert tracker.event.metadata_["standardization_ratio"] == 0.8
+    assert tracker.event.metadata_["standard_skills"] == 8
+
+
+@pytest.mark.asyncio
+async def test_telemetry_tracker_graph_and_affinity() -> None:
+    """TelemetryTracker records graph inference, cluster affinity, and gap severities."""
+    session = AsyncMock()
+    session.add = MagicMock()
+    uid = uuid4()
+
+    tracker = TelemetryTracker(
+        event_type="graph_and_affinity",
+        user_id=uid,
+        session=session,
+        initial_metadata={"cv_id": "cv-101"},
+    )
+
+    async with tracker:
+        tracker.add_metadata(
+            {
+                "total_skills": 12,
+                "inferred_skills": 3,
+                "inference_ratio": 0.25,
+                "primary_cluster": "Backend Python / FastAPI",
+                "affinity_score": 0.8421,
+                "total_gaps_count": 4,
+                "critical_gaps_count": 1,
+                "high_gaps_count": 2,
+                "medium_gaps_count": 1,
+                "seniority": "mid",
+            }
+        )
+
+    assert tracker.event is not None
+    assert tracker.event.event_type == "graph_and_affinity"
+    meta = tracker.event.metadata_
+    assert meta["inferred_skills"] == 3
+    assert meta["inference_ratio"] == 0.25
+    assert meta["affinity_score"] == 0.8421
+    assert meta["critical_gaps_count"] == 1
+    assert meta["high_gaps_count"] == 2
+    assert meta["medium_gaps_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_export_telemetry_to_csv_empty(tmp_path: pytest.TempPathFactory) -> None:
+    """export_telemetry_to_csv writes header when no events exist."""
+    from scripts.export_telemetry import CSV_FIELDNAMES, export_telemetry_to_csv
+
+    target_csv = tmp_path / "empty_telemetry.csv"  # type: ignore[operator]
+    # Patch AsyncSessionLocal to return no events
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = []
+    session_mock = AsyncMock()
+    session_mock.execute.return_value = result_mock
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = session_mock
+    session_ctx.__aexit__.return_value = None
+
+    import scripts.export_telemetry as export_mod
+
+    orig_session = export_mod.AsyncSessionLocal
+    export_mod.AsyncSessionLocal = MagicMock(return_value=session_ctx)  # type: ignore[misc]
+
+    try:
+        count = await export_telemetry_to_csv(target_csv)
+        assert count == 0
+        assert target_csv.exists()
+        header = target_csv.read_text(encoding="utf-8").strip().split(",")
+        assert header == CSV_FIELDNAMES
+    finally:
+        export_mod.AsyncSessionLocal = orig_session
+
+
+@pytest.mark.asyncio
+async def test_export_telemetry_to_csv_with_data(tmp_path: pytest.TempPathFactory) -> None:
+    """export_telemetry_to_csv exports records and parses all fine-grained columns."""
+    from scripts.export_telemetry import CSV_FIELDNAMES, export_telemetry_to_csv
+
+    target_csv = tmp_path / "populated_telemetry.csv"  # type: ignore[operator]
+    uid = uuid4()
+    mock_event = TelemetryEventModel(
+        user_id=uid,
+        event_type="graph_and_affinity",
+        duration_ms=180,
+        status="success",
+        metadata_={
+            "total_skills": 12,
+            "inferred_skills": 3,
+            "inference_ratio": 0.25,
+            "primary_cluster": "Backend Python",
+            "affinity_score": 0.85,
+            "total_gaps_count": 3,
+            "critical_gaps_count": 1,
+            "high_gaps_count": 1,
+            "medium_gaps_count": 1,
+            "seniority": "mid",
+        },
+    )
+
+    result_mock = MagicMock()
+    result_mock.scalars.return_value.all.return_value = [mock_event]
+    session_mock = AsyncMock()
+    session_mock.execute.return_value = result_mock
+    session_ctx = AsyncMock()
+    session_ctx.__aenter__.return_value = session_mock
+    session_ctx.__aexit__.return_value = None
+
+    import scripts.export_telemetry as export_mod
+
+    orig_session = export_mod.AsyncSessionLocal
+    export_mod.AsyncSessionLocal = MagicMock(return_value=session_ctx)  # type: ignore[misc]
+
+    try:
+        count = await export_telemetry_to_csv(target_csv)
+        assert count == 1
+        assert target_csv.exists()
+        content = target_csv.read_text(encoding="utf-8").strip().splitlines()
+        header = content[0].split(",")
+        assert header == CSV_FIELDNAMES
+        assert "graph_and_affinity" in content[1]
+        assert "Backend Python" in content[1]
+    finally:
+        export_mod.AsyncSessionLocal = orig_session
