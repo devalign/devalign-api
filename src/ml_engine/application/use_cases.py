@@ -44,6 +44,8 @@ from src.shared.telemetry import TelemetryTracker
 
 logger = structlog.get_logger(__name__)
 
+CANONICAL_DOMAINS: list[str] = ["Backend", "Frontend", "Data", "DevOps", "QA", "Mobile", "Cloud"]
+
 # ---------------------------------------------------------------------------
 # CV content validation — keyword-based heuristic to detect if a document
 # actually looks like a professional CV/resume before sending to the LLM.
@@ -1472,25 +1474,42 @@ class NormalizeSkillsUseCase:
 def normalize_domain_key(domain_str: str) -> list[str]:
     """Normalize domain strings to canonical title-case names."""
     clean = domain_str.strip().lower()
-    if clean in ("backend",):
+    if clean in ("backend", "back-end", "back_end"):
         return ["Backend"]
-    if clean in ("frontend",):
+    if clean in ("frontend", "front-end", "front_end", "ui", "ux", "web"):
         return ["Frontend"]
-    if clean in ("devops",):
+    if clean in ("devops", "ci/cd", "ci_cd", "cicd", "infra", "infrastructure", "sre"):
         return ["DevOps"]
-    if clean in ("cloud",):
+    if clean in ("cloud", "aws", "gcp", "azure"):
         return ["Cloud"]
     if clean in ("cloud_devops", "cloud/devops"):
         return ["Cloud", "DevOps"]
-    if clean in ("data", "data engineering", "data_engineering", "data science"):
+    if clean in (
+        "data",
+        "data engineering",
+        "data_engineering",
+        "data science",
+        "data_science",
+        "analytics",
+        "big data",
+        "big_data",
+        "database",
+        "sql",
+    ):
         return ["Data"]
-    if clean in ("qa", "testing", "quality assurance"):
+    if clean in (
+        "qa",
+        "testing",
+        "quality assurance",
+        "quality_assurance",
+        "test",
+        "automation_testing",
+    ):
         return ["QA"]
-    if clean in ("mobile", "ios", "android"):
+    if clean in ("mobile", "ios", "android", "flutter", "react native", "react_native"):
         return ["Mobile"]
-    if clean in ("software_engineering", "security"):
-        return []
-    return [domain_str.strip().capitalize()]
+    # Drop all non-canonical, umbrella or generic domains (e.g. software_engineering, engineering, management, security)
+    return []
 
 
 # --- Domain adjacency map and routing configuration ---
@@ -1502,8 +1521,6 @@ DOMAIN_ADJACENCY: dict[str, set[str]] = {
     "Cloud": {"Cloud", "DevOps", "Backend"},
     "Data": {"Data", "Backend", "Cloud"},
     "QA": {"QA", "DevOps", "Backend"},
-    "Engineering": {"Backend", "Frontend", "DevOps"},
-    "Management": {"Backend", "Frontend", "DevOps", "Data"},
 }
 
 DOMAIN_RADAR_THRESHOLD = 0.35
@@ -1583,6 +1600,39 @@ def _filter_affinities_by_domain(
     return filtered if filtered else affinities[:1]
 
 
+def _compute_domain_relevance_multiplier(
+    cluster: TechCluster,
+    user_domain_scores: dict[str, float],
+    total_user_domain_score: float,
+) -> float:
+    """Compute a domain relevance multiplier for a cluster based on user's domain radar.
+
+    The multiplier ranges from 0.50 to 1.0:
+    - 1.0 when the cluster's primary domain is the user's dominant domain
+    - Scaled down proportionally when the cluster's domain has low user affinity
+    - Minimum floor of 0.50 to aggressively penalize clusters completely outside the user's focus
+    """
+    if total_user_domain_score <= 0:
+        return 1.0
+
+    cluster_primary_domain = _get_cluster_primary_domain(cluster)
+    if cluster_primary_domain is None:
+        return 0.70
+
+    user_radar_for_domain = user_domain_scores.get(cluster_primary_domain, 0.0)
+    user_radar_normalized = user_radar_for_domain / total_user_domain_score
+    max_user_domain_score = max(user_domain_scores.values()) / total_user_domain_score
+
+    if max_user_domain_score <= 0:
+        return 1.0
+
+    relative_strength = user_radar_normalized / max_user_domain_score
+    floor_multiplier = 0.50
+    multiplier = floor_multiplier + (1.0 - floor_multiplier) * relative_strength
+
+    return round(multiplier, 4)
+
+
 def compute_affinities_and_domains(
     detected_skills: list[Skill],
     active_clusters: list[TechCluster],
@@ -1595,6 +1645,26 @@ def compute_affinities_and_domains(
     user_tech_skills = [s for s in detected_skills if s.nature == SkillNature.TECH]
     user_tech_norms = {s.normalized_name: s for s in user_tech_skills}
     user_all_norms = {s.normalized_name: s for s in detected_skills}
+
+    domain_scores = {}
+    for s in detected_skills:
+        if s.core_domains:
+            for d in s.core_domains:
+                for norm_d in normalize_domain_key(d):
+                    if norm_d not in domain_scores:
+                        domain_scores[norm_d] = 0.0
+                    domain_scores[norm_d] += s.weight * (
+                        s.frequency if s.frequency is not None else 1.0
+                    )
+        elif s.domain_tags:
+            for d in s.domain_tags:
+                for norm_d in normalize_domain_key(d):
+                    if norm_d not in domain_scores:
+                        domain_scores[norm_d] = 0.0
+                    domain_scores[norm_d] += s.weight * (
+                        s.frequency if s.frequency is not None else 1.0
+                    )
+    total_domain_score = sum(domain_scores.values()) if domain_scores else 0.0
 
     affinities = []
     for cluster in active_clusters:
@@ -1640,7 +1710,17 @@ def compute_affinities_and_domains(
         raw_coverage = covered_weight / cluster_weight_total
         matching_count = len(matched_skills) + (len(partial_matches) * 0.5)
         focus_ratio = min(1.0, matching_count / max(1, len(cluster_tech_skills)))
-        score = round((0.85 * raw_coverage) + (0.15 * (raw_coverage * focus_ratio)), 4)
+        score = (0.85 * raw_coverage) + (0.15 * (raw_coverage * focus_ratio))
+
+        import math
+        expected_skills = 15.0
+        cluster_complexity_factor = min(1.0, math.log(len(cluster_tech_skills) + 1) / math.log(expected_skills + 1))
+        score *= cluster_complexity_factor
+
+        domain_multiplier = _compute_domain_relevance_multiplier(
+            cluster, domain_scores, total_domain_score
+        )
+        score = round(score * domain_multiplier, 4)
 
         insight_parts = []
         if matched_skills:
@@ -1718,25 +1798,6 @@ def compute_affinities_and_domains(
     if not affinities:
         return None, [], [], []
 
-    domain_scores = {}
-    for s in detected_skills:
-        if s.core_domains:
-            for d in s.core_domains:
-                for norm_d in normalize_domain_key(d):
-                    if norm_d not in domain_scores:
-                        domain_scores[norm_d] = 0.0
-                    domain_scores[norm_d] += s.weight * (
-                        s.frequency if s.frequency is not None else 1.0
-                    )
-        elif s.domain_tags:
-            for d in s.domain_tags:
-                for norm_d in normalize_domain_key(d):
-                    if norm_d not in domain_scores:
-                        domain_scores[norm_d] = 0.0
-                    domain_scores[norm_d] += s.weight * (
-                        s.frequency if s.frequency is not None else 1.0
-                    )
-
     # Filter affinities using user's domain radar as primary gate
     filtered_affinities = _filter_affinities_by_domain(affinities, active_clusters, domain_scores)
     if not filtered_affinities:
@@ -1759,35 +1820,45 @@ def compute_affinities_and_domains(
     secondaries = filtered_affinities[1:3]
 
     # Calcular promedios de demanda de mercado por dominio normalizado
-    domain_demands_accum: dict[str, list[float]] = {}
+    domain_demands_accum: dict[str, list[float]] = {d: [] for d in CANONICAL_DOMAINS}
     for cluster in active_clusters:
         for skill in cluster.centroid_skills:
+            domains: list[str] = []
             if skill.core_domains:
                 for d in skill.core_domains:
-                    for norm_d in normalize_domain_key(d):
-                        if norm_d not in domain_demands_accum:
-                            domain_demands_accum[norm_d] = []
-                        domain_demands_accum[norm_d].append(skill.frequency)
+                    domains.extend(normalize_domain_key(d))
             elif skill.domain_tags:
                 for d in skill.domain_tags:
-                    for norm_d in normalize_domain_key(d):
-                        if norm_d not in domain_demands_accum:
-                            domain_demands_accum[norm_d] = []
-                        domain_demands_accum[norm_d].append(skill.frequency)
+                    domains.extend(normalize_domain_key(d))
 
-    domain_market_demand = {
-        d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
-    }
+            for norm_d in domains:
+                if norm_d in domain_demands_accum and skill.frequency is not None:
+                    domain_demands_accum[norm_d].append(skill.frequency)
+
+    domain_market_demand: dict[str, float] = {}
+    for d, freqs in domain_demands_accum.items():
+        if freqs:
+            normalized_freqs = [_normalize_demand_percentage(f) / 100.0 for f in freqs]
+            domain_market_demand[d] = round(sum(normalized_freqs) / len(normalized_freqs), 4)
+        else:
+            domain_market_demand[d] = 0.50
 
     total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
     domain_affinities_dto = [
         DomainAffinityDTO(
             domain=d,
-            affinity_score=score / total_domain_score,
-            market_demand=domain_market_demand.get(d, 0.5),
+            affinity_score=round(domain_scores.get(d, 0.0) / total_domain_score, 4)
+            if total_domain_score > 0
+            else 0.0,
+            market_demand=domain_market_demand.get(d, 0.50),
         )
-        for d, score in domain_scores.items()
+        for d in CANONICAL_DOMAINS
     ]
+    domain_affinities_dto.sort(
+        key=lambda x: (x.affinity_score, CANONICAL_DOMAINS.index(x.domain)),
+        reverse=False,
+    )
+    # Sort descending by score, and by canonical order on ties
     domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
 
     return primary, secondaries, filtered_affinities, domain_affinities_dto
