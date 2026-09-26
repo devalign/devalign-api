@@ -158,4 +158,3 @@ def test_normalize_demand_percentage_handles_baseline_and_continuous_scales():
     assert _normalize_demand_percentage(2.0) == 67
     assert _normalize_demand_percentage(2.4) == 80
     assert _normalize_demand_percentage(3.0) == 98
-

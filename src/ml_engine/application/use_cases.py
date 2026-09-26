@@ -2250,9 +2250,7 @@ def compute_domain_affinities(
         for norm_d in domains:
             if norm_d not in domain_scores:
                 domain_scores[norm_d] = 0.0
-            domain_scores[norm_d] += s.weight * (
-                s.frequency if s.frequency is not None else 1.0
-            )
+            domain_scores[norm_d] += s.weight * (s.frequency if s.frequency is not None else 1.0)
 
     domain_demands_accum: dict[str, list[float]] = {d: [] for d in CANONICAL_DOMAINS}
     for cluster in active_clusters:
