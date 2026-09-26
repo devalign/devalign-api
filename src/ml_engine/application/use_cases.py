@@ -1,5 +1,6 @@
 """ML Engine use cases."""
 
+import asyncio
 import json
 from collections import deque
 from dataclasses import replace as dc_replace
@@ -83,6 +84,27 @@ _CV_SECTION_KEYWORDS: frozenset[str] = frozenset(
     }
 )
 
+_NON_CV_INDICATORS: frozenset[str] = frozenset(
+    {
+        "ejercicios",
+        "laboratorio",
+        "cuestionario",
+        "factura",
+        "recibo",
+        "boleta",
+        "silabo",
+        "sílabo",
+        "examen",
+        "parcial",
+        "homework",
+        "invoice",
+        "receipt",
+        "syllabus",
+        "guía de práctica",
+        "guia de practica",
+    }
+)
+
 
 CONCEPT_PATTERNS: tuple[str, ...] = (
     "back end",
@@ -109,9 +131,18 @@ def is_concept_skill(skill: Any) -> bool:
 
 
 def _looks_like_a_cv(text: str) -> bool:
-    """Quick heuristic: does the text contain CV-like section headers?"""
+    """Quick heuristic: does the text contain CV-like section headers and structure?"""
     text_lower = text.lower()
+    words = text_lower.split()
+    if len(words) < 25:
+        return False
+
+    non_cv_matches = sum(1 for kw in _NON_CV_INDICATORS if kw in text_lower)
     section_matches = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in text_lower)
+
+    if non_cv_matches >= 2 and section_matches < 2:
+        return False
+
     return section_matches >= 2
 
 
@@ -167,15 +198,44 @@ class ProfileUserFromCVUseCase:
     async def _classify_as_cv(self, text: str) -> tuple[bool, float]:
         """Determine if the extracted text is actually a CV/resume.
 
-        Uses a fast heuristic only. The structured extraction step already has
-        an explicit ``not_a_cv`` guard, so we avoid a second LLM round-trip on
-        the hot path.
+        Uses a fast multi-layer heuristic. If the document is obviously not a CV,
+        returns (False, 0.0) to abort before expensive LLM calls.
 
         Returns (is_cv, confidence).
         """
-        if _looks_like_a_cv(text):
-            logger.debug("CV heuristic passed — document looks like a CV")
-            return True, 0.8
+        text_lower = text.lower()
+        words = text_lower.split()
+        if len(words) < 25:
+            return False, 0.0
+
+        non_cv_matches = sum(1 for kw in _NON_CV_INDICATORS if kw in text_lower)
+        section_matches = sum(1 for kw in _CV_SECTION_KEYWORDS if kw in text_lower)
+
+        if non_cv_matches >= 2 and section_matches < 2:
+            logger.info(
+                "Document identified as non-CV by keyword heuristic",
+                non_cv_matches=non_cv_matches,
+            )
+            return False, 0.1
+
+        if section_matches >= 2:
+            logger.debug(
+                "CV heuristic passed — document looks like a CV",
+                section_matches=section_matches,
+            )
+            return True, 0.85
+
+        if section_matches == 1 and len(words) >= 50:
+            logger.debug(
+                "CV heuristic weak pass — continuing to extraction",
+                section_matches=section_matches,
+            )
+            return True, 0.6
+
+        # Zero section matches and short or ambiguous text
+        if section_matches == 0 and len(words) < 80:
+            logger.info("Document rejected early — no CV section headers found")
+            return False, 0.2
 
         logger.info("CV heuristic inconclusive, continuing with structured extraction")
         return True, 0.5
@@ -416,7 +476,7 @@ class ProfileUserFromCVUseCase:
         return list(inferred_skills.values())
 
     async def _combined_llm_extraction(self, cv_text: str) -> dict[str, Any]:
-        """Single streamlined LLM call for core CV extraction.
+        """Single streamlined LLM call for core CV extraction with timeout safeguard.
 
         Extracts: current job role, technical summary, years of experience,
         and exhaustive technical skills list in one prompt.
@@ -427,7 +487,18 @@ class ProfileUserFromCVUseCase:
         cv_text_char_limit = 15000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
         prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-        raw_output = await self._llm.generate(prompt=prompt, context=[], max_tokens=3000)
+
+        try:
+            raw_output = await asyncio.wait_for(
+                self._llm.generate(prompt=prompt, context=[], max_tokens=3000),
+                timeout=45.0,
+            )
+        except TimeoutError as exc:
+            logger.error("LLM extraction timed out after 45 seconds")
+            raise MLPipelineError(
+                "LLM extraction timed out after 45s. Please retry or upload a shorter document."
+            ) from exc
+
         parsed = _parse_cv_extraction_output(raw_output)
         if not parsed:
             raise ValueError("Empty extraction data parsed")
@@ -466,22 +537,31 @@ class ProfileUserFromCVUseCase:
             },
         ) as parse_tracker:
             cv_text = await self._cv_parser.extract_text(cv_content, content_type)
+            words = cv_text.split()
             parse_tracker.add_metadata(
                 {
                     "char_count": len(cv_text),
-                    "word_count": len(cv_text.split()),
+                    "word_count": len(words),
                 }
             )
 
-        if not cv_text.strip():
-            raise MLPipelineError("CV text extraction returned empty content")
+            if not cv_text.strip():
+                raise MLPipelineError("CV text extraction returned empty content")
 
-        is_cv, confidence = await self._classify_as_cv(cv_text)
-        if not is_cv:
-            raise MLPipelineError(
-                "The uploaded document does not appear to be a professional CV/resume. "
-                "Please upload a document with your work experience, education, and skills."
-            )
+            if len(words) < 25:
+                raise MLPipelineError(
+                    "The uploaded document is too short to be a valid CV/resume. "
+                    "Please upload a complete document with your work experience, education, and skills."
+                )
+
+            is_cv, confidence = await self._classify_as_cv(cv_text)
+            if not is_cv:
+                raise MLPipelineError(
+                    "The uploaded document does not appear to be a professional CV/resume. "
+                    "Please upload a document with your work experience, education, and skills."
+                )
+            parse_tracker.add_metadata({"classification_confidence": confidence})
+
         logger.debug("Document classified as CV", confidence=confidence)
 
         async with TelemetryTracker(
@@ -495,15 +575,17 @@ class ProfileUserFromCVUseCase:
             extracted_data = await self._combined_llm_extraction(cv_text)
 
             # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
-            raw_skills_count = 0
+            raw_llm_skills_count = 0
+            direct_catalog_skills_count = 0
             if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
-                raw_skills_count = len(extracted_data["skills"])
+                raw_llm_skills_count = len(extracted_data["skills"])
                 try:
                     all_skills = await self._skills.get_all_skills()
                     # Hybrid pipeline: Fast deterministic scan of raw CV text against canonical catalog
                     direct_catalog_skills = await self._catalog.scan_text_for_catalog_skills(
                         cv_text, existing_skills_cache=all_skills
                     )
+                    direct_catalog_skills_count = len(direct_catalog_skills)
                     combined_skills = list(extracted_data["skills"]) + direct_catalog_skills
 
                     extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
@@ -512,6 +594,8 @@ class ProfileUserFromCVUseCase:
                     logger.info(
                         "Pre-normalized extracted skills against catalog (hybrid mode)",
                         count=len(extracted_data["skills"]),
+                        llm_count=raw_llm_skills_count,
+                        direct_scanned_count=direct_catalog_skills_count,
                     )
                 except Exception as exc:
                     logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
@@ -532,7 +616,15 @@ class ProfileUserFromCVUseCase:
 
             llm_tracker.add_metadata(
                 {
-                    "raw_skills_count": raw_skills_count,
+                    "raw_skills_count": raw_llm_skills_count,
+                    "llm_skills_count": raw_llm_skills_count,
+                    "direct_catalog_skills_count": direct_catalog_skills_count,
+                    "hybrid_total_extracted": total_extracted,
+                    "hybrid_boost_ratio": (
+                        round(direct_catalog_skills_count / total_extracted, 4)
+                        if total_extracted > 0
+                        else 0.0
+                    ),
                     "total_skills_phase1": total_extracted,
                     "standard_skills_phase1": std_count,
                     "custom_skills_phase1": custom_count,
@@ -572,8 +664,43 @@ class ProfileUserFromCVUseCase:
 
         seniority = profile.seniority
 
+        # If validated_skills provided, convert to raw_skills format
+        if validated_skills is not None:
+            raw_skills = [
+                {
+                    "name": s.name,
+                    "category": s.skill_type,
+                    "years_of_experience": s.years_of_experience or 0,
+                    "personal_projects": s.personal_projects or False,
+                    "has_certification": s.has_certification or False,
+                    "is_custom": getattr(s, "is_custom", False),
+                }
+                for s in validated_skills
+            ]
+        else:
+            # Use whatever raw data is available from the existing profile
+            extracted_data_skills = []
+            for s in profile.detected_skills:
+                extracted_data_skills.append(
+                    {
+                        "name": s.name,
+                        "category": s.nature.value if s.nature else "technical",
+                        "years_of_experience": s.years_of_experience or 0,
+                        "personal_projects": s.personal_projects or False,
+                        "has_certification": s.has_certification or False,
+                        "is_custom": getattr(s, "is_custom", False),
+                    }
+                )
+            raw_skills = extracted_data_skills if extracted_data_skills else []
+
+        # Embedding (static zero-vector for backwards compatibility)
+        cv_embedding = [0.0] * 1024
+
+        all_skills = await self._skills.get_all_skills()
+
+        # Step 1: Normalization Telemetry Tracker
         async with TelemetryTracker(
-            "diagnosis_phase2",
+            "skill_normalization",
             user_id=user_id,
             initial_metadata={
                 "cv_id": str(cv_id),
@@ -582,49 +709,34 @@ class ProfileUserFromCVUseCase:
                 if validated_skills is not None
                 else 0,
             },
-        ) as diag_tracker:
-            # If validated_skills provided, convert to raw_skills format
-            if validated_skills is not None:
-                raw_skills = [
-                    {
-                        "name": s.name,
-                        "category": s.skill_type,
-                        "years_of_experience": s.years_of_experience or 0,
-                        "personal_projects": s.personal_projects or False,
-                        "has_certification": s.has_certification or False,
-                        "is_custom": getattr(s, "is_custom", False),
-                    }
-                    for s in validated_skills
-                ]
-            else:
-                # Use whatever raw data is available from the existing profile
-                extracted_data_skills = []
-                for s in profile.detected_skills:
-                    extracted_data_skills.append(
-                        {
-                            "name": s.name,
-                            "category": s.nature.value if s.nature else "technical",
-                            "years_of_experience": s.years_of_experience or 0,
-                            "personal_projects": s.personal_projects or False,
-                            "has_certification": s.has_certification or False,
-                            "is_custom": getattr(s, "is_custom", False),
-                        }
-                    )
-                raw_skills = extracted_data_skills if extracted_data_skills else []
-
-            # Embedding (static zero-vector for backwards compatibility)
-            cv_embedding = [0.0] * 1024
-
-            # Normalize user skills against the canonical catalog
+        ) as norm_tracker:
             logger.info("Phase 2 — normalising skills", user_id=str(user_id))
-            all_skills = await self._skills.get_all_skills()
             detected_skills = await self._normalize_user_skills(
                 raw_skills,
                 use_llm_fallback=False,
                 existing_skills_cache=all_skills,
                 seniority=seniority,
             )
+            total_norm = len(detected_skills)
+            std_count = sum(1 for s in detected_skills if not getattr(s, "is_custom", False))
+            custom_count = sum(1 for s in detected_skills if getattr(s, "is_custom", False))
+            norm_tracker.add_metadata(
+                {
+                    "total_skills": total_norm,
+                    "standard_skills": std_count,
+                    "custom_skills": custom_count,
+                    "standardization_ratio": (
+                        round(std_count / total_norm, 4) if total_norm > 0 else 0.0
+                    ),
+                }
+            )
 
+        # Step 2: Knowledge Graph Inference & Cluster Affinity Telemetry Tracker
+        async with TelemetryTracker(
+            "graph_and_affinity",
+            user_id=user_id,
+            initial_metadata={"cv_id": str(cv_id)},
+        ) as graph_tracker:
             # Upward inference on the skill graph
             detected_skills = await self._expand_with_upward_inference(
                 detected_skills,
@@ -638,7 +750,7 @@ class ProfileUserFromCVUseCase:
                     "No tech clusters available — skipping Phase 2 diagnosis",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_clusters_available"})
+                graph_tracker.add_metadata({"status_detail": "no_clusters_available"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -657,7 +769,7 @@ class ProfileUserFromCVUseCase:
                     "No active clusters with centroid skills — skipping Phase 2",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_active_clusters_with_centroids"})
+                graph_tracker.add_metadata({"status_detail": "no_active_clusters_with_centroids"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -677,7 +789,7 @@ class ProfileUserFromCVUseCase:
                     "No cluster affinities — skipping Phase 2",
                     user_id=str(user_id),
                 )
-                diag_tracker.add_metadata({"status_detail": "no_cluster_affinities_computed"})
+                graph_tracker.add_metadata({"status_detail": "no_cluster_affinities_computed"})
                 return UserProfileDTO(
                     user_id=user_id,
                     cv_id=cv_id,
@@ -688,16 +800,15 @@ class ProfileUserFromCVUseCase:
                     message="Profile saved. Could not compute cluster affinity.",
                 )
 
-            # Select Top 3 affinities with affinity_score > 0
+            # Rank all affinities with affinity_score > 0 (or all if none > 0)
             valid_affinities = [a for a in affinities_raw if a.affinity_score > 0]
             if not valid_affinities:
                 valid_affinities = affinities_raw[:1]
-            top_affinities = valid_affinities[:3]
 
             from dataclasses import replace as dc_replace_affinity
 
-            primary = dc_replace_affinity(top_affinities[0], is_primary=True)
-            secondaries = [dc_replace_affinity(a, is_primary=False) for a in top_affinities[1:]]
+            primary = dc_replace_affinity(valid_affinities[0], is_primary=True)
+            secondaries = [dc_replace_affinity(a, is_primary=False) for a in valid_affinities[1:]]
 
             # Detect skill gaps vs primary cluster
             primary_cluster = next((c for c in clusters if c.id == primary.cluster_id), None)
@@ -724,12 +835,16 @@ class ProfileUserFromCVUseCase:
                         skill_gaps.append(SkillGap(skill=skill, market_importance=importance))
                 skill_gaps.sort(key=lambda g: g.skill.weight * g.skill.frequency, reverse=True)
 
-            # Persist enriched profile with is_diagnosed=True and Top 3 affinities
+            critical_gaps = sum(1 for g in skill_gaps if g.market_importance == "critical")
+            high_gaps = sum(1 for g in skill_gaps if g.market_importance == "high")
+            medium_gaps = sum(1 for g in skill_gaps if g.market_importance == "medium")
+
+            # Persist enriched profile with is_diagnosed=True and Top 1 primary diagnostic
             logger.info(
-                "Phase 2 — persisting full diagnosis with Top 3 affinities",
+                "Phase 2 — persisting primary diagnosis with full ranking",
                 user_id=str(user_id),
                 primary=primary.cluster_name,
-                secondaries=[s.cluster_name for s in secondaries],
+                ranked_count=len(secondaries) + 1,
             )
             from dataclasses import replace as dc_replace_profile
 
@@ -743,31 +858,29 @@ class ProfileUserFromCVUseCase:
                 skill_gaps=skill_gaps,
                 is_diagnosed=True,
             )
-            await self._profiles.save(diagnosed_profile)
+            await self._profiles.save_profile(
+                diagnosed_profile, persist_diagnostics=True, persist_primary_only=True
+            )
 
             # Record telemetry metrics for thesis evaluation
             total_skills = len(detected_skills)
-            std_count = sum(1 for s in detected_skills if not getattr(s, "is_custom", False))
-            custom_count = sum(1 for s in detected_skills if getattr(s, "is_custom", False))
             inferred_count = sum(
                 1 for s in detected_skills if len(getattr(s, "inferred_from", [])) > 0
             )
 
-            diag_tracker.add_metadata(
+            graph_tracker.add_metadata(
                 {
                     "total_skills": total_skills,
-                    "standard_skills": std_count,
-                    "custom_skills": custom_count,
                     "inferred_skills": inferred_count,
-                    "standardization_ratio": (
-                        round(std_count / total_skills, 4) if total_skills > 0 else 0.0
-                    ),
                     "inference_ratio": (
                         round(inferred_count / total_skills, 4) if total_skills > 0 else 0.0
                     ),
                     "primary_cluster": primary.cluster_name,
                     "affinity_score": round(primary.affinity_score, 4),
-                    "gaps_count": len(skill_gaps),
+                    "total_gaps_count": len(skill_gaps),
+                    "critical_gaps_count": critical_gaps,
+                    "high_gaps_count": high_gaps,
+                    "medium_gaps_count": medium_gaps,
                     "seniority": seniority.value,
                 }
             )
@@ -781,9 +894,12 @@ class ProfileUserFromCVUseCase:
 
             # Build response DTOs for all Top 3 affinities
             user_skills_map = {s.normalized_name: s for s in detected_skills}
-            primary_dto = _cluster_affinity_to_dto(primary, True, user_skills_map)
+            primary_dto = _cluster_affinity_to_dto(
+                primary, True, user_skills_map, is_evaluated=True
+            )
             secondaries_dto = [
-                _cluster_affinity_to_dto(a, False, user_skills_map) for a in secondaries
+                _cluster_affinity_to_dto(a, False, user_skills_map, is_evaluated=False)
+                for a in secondaries
             ]
             all_affinities_dto = [primary_dto, *secondaries_dto]
 
@@ -994,6 +1110,7 @@ def _cluster_affinity_to_dto(
     affinity: ClusterAffinity,
     is_primary: bool,
     user_skills_map: dict[str, Any],
+    is_evaluated: bool = False,
 ) -> ClusterAffinityDTO:
     """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
     return ClusterAffinityDTO(
@@ -1001,6 +1118,7 @@ def _cluster_affinity_to_dto(
         cluster_name=affinity.cluster_name,
         affinity_score=affinity.affinity_score,
         is_primary=is_primary,
+        is_evaluated=is_evaluated,
         market_insights=affinity.market_insights,
         compatible_roles=affinity.compatible_roles,
         ai_insight=affinity.ai_insight,
@@ -2256,6 +2374,13 @@ class GetMyProfileUseCase:
         primary = profile.primary_affinity
         secondaries = profile.secondary_affinities
 
+        persisted_cluster_names = set()
+        if primary and primary.cluster_name and primary.cluster_name != "Sin Diagnóstico":
+            persisted_cluster_names.add(primary.cluster_name.lower())
+        for a in secondaries or []:
+            if a.cluster_name:
+                persisted_cluster_names.add(a.cluster_name.lower())
+
         # Derive secondary affinities on-the-fly for diagnosed profiles where secondaries were not stored
         if (
             (not secondaries or len(secondaries) == 0)
@@ -2268,12 +2393,18 @@ class GetMyProfileUseCase:
             )
             if all_raw:
                 valid_aff = [a for a in all_raw if a.affinity_score > 0] or all_raw[:1]
-                top_aff = valid_aff[:3]
                 from dataclasses import replace as dc_replace_aff
 
                 if not primary or primary.cluster_name == "Sin Diagnóstico":
-                    primary = dc_replace_aff(top_aff[0], is_primary=True)
-                secondaries = [dc_replace_aff(a, is_primary=False) for a in top_aff[1:]]
+                    primary = dc_replace_aff(valid_aff[0], is_primary=True)
+                    secondaries = [dc_replace_aff(a, is_primary=False) for a in valid_aff[1:]]
+                else:
+                    secondaries = [
+                        dc_replace_aff(a, is_primary=False)
+                        for a in valid_aff
+                        if a.cluster_id != primary.cluster_id
+                        and a.cluster_name.lower() != primary.cluster_name.lower()
+                    ]
 
         all_affinities = (
             [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
@@ -2293,6 +2424,7 @@ class GetMyProfileUseCase:
                     cluster_name=a.cluster_name,
                     affinity_score=a.affinity_score,
                     is_primary=False,
+                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
                     job_offer_count=a.job_offer_count,
@@ -2354,6 +2486,7 @@ class GetMyProfileUseCase:
                     cluster_name=a.cluster_name,
                     affinity_score=a.affinity_score,
                     is_primary=(primary and a.cluster_id == primary.cluster_id),
+                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
                     market_insights=a.market_insights,
                     compatible_roles=a.compatible_roles,
                     job_offer_count=a.job_offer_count,
@@ -2554,6 +2687,10 @@ class GetClusterDiagnosticUseCase:
             raise HTTPException(status_code=500, detail="Failed to compute affinity score.")
 
         affinity = affinities[0]
+
+        # Lazy persistence: save evaluated cluster to database on-demand
+        await self._profiles.save_single_diagnostic(user_id, affinity)
+
         active_clusters = [c for c in active_clusters if c.centroid_skills]
         domain_affinities_dto = compute_domain_affinities(profile.detected_skills, active_clusters)
 

@@ -51,6 +51,7 @@ class ClusterAffinityDTO(BaseModel):
     cluster_name: str
     affinity_score: float = Field(ge=0.0, le=1.0)
     is_primary: bool
+    is_evaluated: bool = False
     market_insights: dict[str, Any] | None = None
     compatible_roles: list[dict[str, Any]] | None = None
     ai_insight: str | None = None

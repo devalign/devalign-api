@@ -10,13 +10,45 @@ import asyncio
 import csv
 import json
 import sys
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import select
 
 from src.shared.database import AsyncSessionLocal
 from src.shared.telemetry.models import TelemetryEventModel
+
+CSV_FIELDNAMES = [
+    "id",
+    "created_at",
+    "user_id",
+    "event_type",
+    "duration_ms",
+    "status",
+    "error_message",
+    "file_size_bytes",
+    "char_count",
+    "word_count",
+    "raw_skills_count",
+    "llm_skills_count",
+    "direct_catalog_skills_count",
+    "hybrid_total_extracted",
+    "hybrid_boost_ratio",
+    "total_skills",
+    "standard_skills",
+    "custom_skills",
+    "inferred_skills",
+    "standardization_ratio",
+    "inference_ratio",
+    "affinity_score",
+    "primary_cluster",
+    "total_gaps_count",
+    "critical_gaps_count",
+    "high_gaps_count",
+    "medium_gaps_count",
+    "seniority",
+    "metadata_json",
+]
 
 
 async def export_telemetry_to_csv(output_file: Path) -> int:
@@ -31,32 +63,9 @@ async def export_telemetry_to_csv(output_file: Path) -> int:
 
     if not events:
         print("No telemetry events found in database.")
-        # Create empty file with headers
-        fieldnames = [
-            "id",
-            "created_at",
-            "user_id",
-            "event_type",
-            "duration_ms",
-            "status",
-            "error_message",
-            "file_size_bytes",
-            "char_count",
-            "word_count",
-            "total_skills",
-            "standard_skills",
-            "custom_skills",
-            "inferred_skills",
-            "standardization_ratio",
-            "inference_ratio",
-            "affinity_score",
-            "primary_cluster",
-            "gaps_count",
-            "seniority",
-            "metadata_json",
-        ]
+        output_file.parent.mkdir(parents=True, exist_ok=True)
         with open(output_file, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
             writer.writeheader()
         print(f"Empty template CSV created at: {output_file}")
         return 0
@@ -76,6 +85,11 @@ async def export_telemetry_to_csv(output_file: Path) -> int:
                 "file_size_bytes": meta.get("file_size_bytes", ""),
                 "char_count": meta.get("char_count", ""),
                 "word_count": meta.get("word_count", ""),
+                "raw_skills_count": meta.get("raw_skills_count", ""),
+                "llm_skills_count": meta.get("llm_skills_count", ""),
+                "direct_catalog_skills_count": meta.get("direct_catalog_skills_count", ""),
+                "hybrid_total_extracted": meta.get("hybrid_total_extracted", ""),
+                "hybrid_boost_ratio": meta.get("hybrid_boost_ratio", ""),
                 "total_skills": meta.get("total_skills", meta.get("total_skills_phase1", "")),
                 "standard_skills": meta.get(
                     "standard_skills", meta.get("standard_skills_phase1", "")
@@ -88,16 +102,18 @@ async def export_telemetry_to_csv(output_file: Path) -> int:
                 "inference_ratio": meta.get("inference_ratio", ""),
                 "affinity_score": meta.get("affinity_score", ""),
                 "primary_cluster": meta.get("primary_cluster", ""),
-                "gaps_count": meta.get("gaps_count", ""),
+                "total_gaps_count": meta.get("total_gaps_count", meta.get("gaps_count", "")),
+                "critical_gaps_count": meta.get("critical_gaps_count", ""),
+                "high_gaps_count": meta.get("high_gaps_count", ""),
+                "medium_gaps_count": meta.get("medium_gaps_count", ""),
                 "seniority": meta.get("seniority", ""),
                 "metadata_json": json.dumps(meta, ensure_ascii=False),
             }
         )
 
-    fieldnames = list(rows[0].keys())
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -109,7 +125,7 @@ def main() -> None:
     if len(sys.argv) > 1:
         target = Path(sys.argv[1])
     else:
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         target = Path(f"data/telemetry_export_{timestamp}.csv")
 
     asyncio.run(export_telemetry_to_csv(target))

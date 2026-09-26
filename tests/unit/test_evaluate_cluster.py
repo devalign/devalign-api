@@ -93,3 +93,73 @@ async def test_evaluate_cluster_diagnostic_use_case_success():
     assert (
         saved_profile.secondary_affinities[0].affinity_score == 0.25
     )  # Since user has Java and cluster has Java, but cluster only has 1 skill (log(2)/log(16) = 0.25 penalty)
+
+
+@pytest.mark.asyncio
+async def test_get_cluster_diagnostic_lazy_persists():
+    from src.ml_engine.application.use_cases import GetClusterDiagnosticUseCase
+
+    user_id = uuid4()
+    cluster_name = "Backend Cloud-Native Java"
+    cluster_id = uuid4()
+
+    mock_profile = UserProfile(
+        user_id=user_id,
+        cv_id=uuid4(),
+        embedding=[0.0] * 1024,
+        detected_skills=[
+            Skill(
+                id=uuid4(),
+                name="Java",
+                nature=SkillNature.TECH,
+                normalized_name="java",
+                weight=3.0,
+                frequency=1.0,
+                ict_score=10.0,
+            )
+        ],
+        seniority=SeniorityLevel.MID,
+        primary_affinity=ClusterAffinity(
+            cluster_id=uuid4(),
+            cluster_name="Frontend React",
+            affinity_score=0.5,
+            is_primary=True,
+        ),
+        secondary_affinities=[],
+    )
+
+    mock_cluster = TechCluster(
+        id=cluster_id,
+        name=cluster_name,
+        description="Java Backend",
+        centroid_skills=[
+            Skill(
+                id=uuid4(),
+                name="Java",
+                nature=SkillNature.TECH,
+                normalized_name="java",
+                weight=3.0,
+                frequency=1.0,
+            )
+        ],
+        job_offer_count=10,
+        cluster_index=0,
+    )
+
+    profile_repo = MagicMock()
+    profile_repo.get_by_user_id = AsyncMock(return_value=mock_profile)
+    profile_repo.save_single_diagnostic = AsyncMock()
+
+    cluster_repo = MagicMock()
+    cluster_repo.get_all_active = AsyncMock(return_value=[mock_cluster])
+
+    use_case = GetClusterDiagnosticUseCase(profile_repo, cluster_repo)
+
+    dto = await use_case.execute(user_id, cluster_name)
+
+    assert dto is not None
+    assert dto.cluster_name == cluster_name
+    assert profile_repo.save_single_diagnostic.call_count == 1
+    call_args = profile_repo.save_single_diagnostic.call_args[0]
+    assert call_args[0] == user_id
+    assert call_args[1].cluster_name == cluster_name

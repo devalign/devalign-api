@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -45,9 +46,18 @@ async def record_telemetry_event(
         )
 
         if session is not None:
-            session.add(event)
-            await session.commit()
-            return event
+            try:
+                session.add(event)
+                await session.commit()
+                return event
+            except Exception as session_exc:
+                logger.warning(
+                    "Provided session failed for telemetry, rolling back and using isolated session",
+                    event_type=event_type,
+                    error=str(session_exc),
+                )
+                with contextlib.suppress(Exception):
+                    await session.rollback()
 
         async with AsyncSessionLocal() as local_session:
             local_session.add(event)
