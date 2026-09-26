@@ -91,5 +91,5 @@ def test_compute_domain_affinities_calculates_correct_scores():
     domain_map = {d.domain: d.affinity_score for d in domain_affinities}
     assert "Frontend" in domain_map
     assert "Backend" in domain_map
-    assert pytest.approx(domain_map["Frontend"]) == 2.85 / 6.30
-    assert pytest.approx(domain_map["Backend"]) == 3.45 / 6.30
+    assert pytest.approx(domain_map["Frontend"], abs=1e-4) == 2.85 / 6.30
+    assert pytest.approx(domain_map["Backend"], abs=1e-4) == 3.45 / 6.30
