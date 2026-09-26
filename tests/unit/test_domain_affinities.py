@@ -139,3 +139,23 @@ def test_compute_affinities_and_domains_normalizes_market_demand_bound():
     assert mobile_affinity is not None
     assert 0.0 <= mobile_affinity.market_demand <= 1.0
     assert mobile_affinity.market_demand <= 0.98
+
+
+def test_normalize_demand_percentage_handles_baseline_and_continuous_scales():
+    from src.ml_engine.application.use_cases import _normalize_demand_percentage
+
+    # None defaults to 70%
+    assert _normalize_demand_percentage(None) == 70
+
+    # True fractions (0.0 < f < 1.0)
+    assert _normalize_demand_percentage(0.78) == 78
+    assert _normalize_demand_percentage(0.50) == 50
+
+    # Discrete/continuous importance scores (1.0 to 3.0 scale)
+    # Baseline 1.0 importance must NOT yield 100%
+    assert _normalize_demand_percentage(1.0) == 33
+    assert _normalize_demand_percentage(1.5) == 50
+    assert _normalize_demand_percentage(2.0) == 67
+    assert _normalize_demand_percentage(2.4) == 80
+    assert _normalize_demand_percentage(3.0) == 98
+

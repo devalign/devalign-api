@@ -1099,9 +1099,9 @@ def _normalize_demand_percentage(frequency: float | None) -> int:
     """Normalize skill frequency or importance metric to a sensible market demand percentage (20% - 98%)."""
     if frequency is None:
         return 70
-    if 0.0 < frequency <= 1.0:
+    if 0.0 < frequency < 1.0:
         return round(frequency * 100)
-    # If frequency is an importance score (e.g. 1.5 - 3.0)
+    # If frequency is an importance score (e.g. 1.0 - 3.0) or default 1.0
     scaled = (frequency / 3.0) * 100
     return min(98, max(20, round(scaled)))
 
@@ -1939,49 +1939,7 @@ def compute_affinities_and_domains(
     )
 
     secondaries = filtered_affinities[1:3]
-
-    # Calcular promedios de demanda de mercado por dominio normalizado
-    domain_demands_accum: dict[str, list[float]] = {d: [] for d in CANONICAL_DOMAINS}
-    for cluster in active_clusters:
-        for skill in cluster.centroid_skills:
-            domains: list[str] = []
-            if skill.core_domains:
-                for d in skill.core_domains:
-                    domains.extend(normalize_domain_key(d))
-            elif skill.domain_tags:
-                for d in skill.domain_tags:
-                    domains.extend(normalize_domain_key(d))
-
-            for norm_d in domains:
-                if norm_d in domain_demands_accum and skill.frequency is not None:
-                    domain_demands_accum[norm_d].append(skill.frequency)
-
-    domain_market_demand: dict[str, float] = {}
-    for d, freqs in domain_demands_accum.items():
-        if freqs:
-            normalized_freqs = [_normalize_demand_percentage(f) / 100.0 for f in freqs]
-            domain_market_demand[d] = round(sum(normalized_freqs) / len(normalized_freqs), 4)
-        else:
-            domain_market_demand[d] = 0.50
-
-    total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
-    domain_affinities_dto = [
-        DomainAffinityDTO(
-            domain=d,
-            affinity_score=round(domain_scores.get(d, 0.0) / total_domain_score, 4)
-            if total_domain_score > 0
-            else 0.0,
-            market_demand=domain_market_demand.get(d, 0.50),
-        )
-        for d in CANONICAL_DOMAINS
-    ]
-    domain_affinities_dto.sort(
-        key=lambda x: (x.affinity_score, CANONICAL_DOMAINS.index(x.domain)),
-        reverse=False,
-    )
-    # Sort descending by score, and by canonical order on ties
-    domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
-
+    domain_affinities_dto = compute_domain_affinities(detected_skills, active_clusters)
     return primary, secondaries, filtered_affinities, domain_affinities_dto
 
 
@@ -2279,46 +2237,61 @@ def compute_domain_affinities(
 ) -> list[DomainAffinityDTO]:
     from src.ml_engine.application.dtos import DomainAffinityDTO
 
-    domain_scores = {}
+    domain_scores: dict[str, float] = {}
     for s in detected_skills:
+        domains: list[str] = []
         if s.core_domains:
             for d in s.core_domains:
-                for norm_d in normalize_domain_key(d):
-                    if norm_d not in domain_scores:
-                        domain_scores[norm_d] = 0.0
-                    domain_scores[norm_d] += s.weight * (
-                        s.frequency if s.frequency is not None else 1.0
-                    )
+                domains.extend(normalize_domain_key(d))
+        elif s.domain_tags:
+            for d in s.domain_tags:
+                domains.extend(normalize_domain_key(d))
 
-    domain_demands_accum: dict[str, list[float]] = {}
+        for norm_d in domains:
+            if norm_d not in domain_scores:
+                domain_scores[norm_d] = 0.0
+            domain_scores[norm_d] += s.weight * (
+                s.frequency if s.frequency is not None else 1.0
+            )
+
+    domain_demands_accum: dict[str, list[float]] = {d: [] for d in CANONICAL_DOMAINS}
     for cluster in active_clusters:
         for skill in cluster.centroid_skills:
+            domains = []
             if skill.core_domains:
                 for d in skill.core_domains:
-                    for norm_d in normalize_domain_key(d):
-                        if norm_d not in domain_demands_accum:
-                            domain_demands_accum[norm_d] = []
-                        domain_demands_accum[norm_d].append(skill.frequency)
+                    domains.extend(normalize_domain_key(d))
             elif skill.domain_tags:
                 for d in skill.domain_tags:
-                    for norm_d in normalize_domain_key(d):
-                        if norm_d not in domain_demands_accum:
-                            domain_demands_accum[norm_d] = []
-                        domain_demands_accum[norm_d].append(skill.frequency)
+                    domains.extend(normalize_domain_key(d))
 
-    domain_market_demand = {
-        d: sum(freqs) / len(freqs) if freqs else 0.5 for d, freqs in domain_demands_accum.items()
-    }
+            for norm_d in domains:
+                if norm_d in domain_demands_accum and skill.frequency is not None:
+                    domain_demands_accum[norm_d].append(skill.frequency)
+
+    domain_market_demand: dict[str, float] = {}
+    for d, freqs in domain_demands_accum.items():
+        if freqs:
+            normalized_freqs = [_normalize_demand_percentage(f) / 100.0 for f in freqs]
+            domain_market_demand[d] = round(sum(normalized_freqs) / len(normalized_freqs), 4)
+        else:
+            domain_market_demand[d] = 0.50
 
     total_domain_score = sum(domain_scores.values()) if domain_scores else 1.0
     domain_affinities_dto = [
         DomainAffinityDTO(
             domain=d,
-            affinity_score=score / total_domain_score,
-            market_demand=domain_market_demand.get(d, 0.5),
+            affinity_score=round(domain_scores.get(d, 0.0) / total_domain_score, 4)
+            if total_domain_score > 0
+            else 0.0,
+            market_demand=domain_market_demand.get(d, 0.50),
         )
-        for d, score in domain_scores.items()
+        for d in CANONICAL_DOMAINS
     ]
+    domain_affinities_dto.sort(
+        key=lambda x: (x.affinity_score, CANONICAL_DOMAINS.index(x.domain)),
+        reverse=False,
+    )
     domain_affinities_dto.sort(key=lambda x: x.affinity_score, reverse=True)
     return domain_affinities_dto
 
@@ -2335,7 +2308,7 @@ class GetMyProfileUseCase:
         self._clusters = cluster_repository
 
     async def execute(self, user_id: UUID) -> UserProfileDTO | None:
-        from src.ml_engine.application.dtos import ClusterAffinityDTO, SkillDTO, UserProfileDTO
+        from src.ml_engine.application.dtos import SkillDTO, UserProfileDTO
 
         profile = await self._profiles.get_by_user_id(user_id)
         if not profile:
@@ -2381,13 +2354,8 @@ class GetMyProfileUseCase:
             if a.cluster_name:
                 persisted_cluster_names.add(a.cluster_name.lower())
 
-        # Derive secondary affinities on-the-fly for diagnosed profiles where secondaries were not stored
-        if (
-            (not secondaries or len(secondaries) == 0)
-            and profile.is_diagnosed
-            and profile.detected_skills
-            and len(active_clusters) > 1
-        ):
+        # Derive all affinities on-the-fly for diagnosed profiles across all active clusters
+        if profile.is_diagnosed and profile.detected_skills and len(active_clusters) > 0:
             _p_raw, _s_raw, all_raw, _ = compute_affinities_and_domains(
                 profile.detected_skills, active_clusters
             )
@@ -2399,6 +2367,7 @@ class GetMyProfileUseCase:
                     primary = dc_replace_aff(valid_aff[0], is_primary=True)
                     secondaries = [dc_replace_aff(a, is_primary=False) for a in valid_aff[1:]]
                 else:
+                    # Keep primary specialty as primary, and rank all other clusters as secondaries
                     secondaries = [
                         dc_replace_aff(a, is_primary=False)
                         for a in valid_aff
@@ -2406,11 +2375,30 @@ class GetMyProfileUseCase:
                         and a.cluster_name.lower() != primary.cluster_name.lower()
                     ]
 
-        all_affinities = (
-            [primary, *secondaries] if primary.cluster_name != "Sin Diagnóstico" else []
+        user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
+
+        secondary_affinities_dto = [
+            _cluster_affinity_to_dto(
+                a,
+                is_primary=False,
+                user_skills_map=user_skills_map,
+                is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
+            )
+            for a in (secondaries if secondaries else [])
+        ]
+
+        primary_dto = (
+            _cluster_affinity_to_dto(
+                primary,
+                is_primary=True,
+                user_skills_map=user_skills_map,
+                is_evaluated=True,
+            )
+            if primary and primary.cluster_name != "Sin Diagnóstico"
+            else None
         )
 
-        user_skills_map = {s.normalized_name: s for s in profile.detected_skills}
+        all_affinities_dto = [primary_dto, *secondary_affinities_dto] if primary_dto else []
 
         return UserProfileDTO(
             user_id=profile.user_id,
@@ -2418,139 +2406,15 @@ class GetMyProfileUseCase:
             seniority=profile.seniority.value,
             primary_specialty=primary.cluster_name if primary else profile.primary_specialty,
             alignment_score=primary.affinity_score if primary else profile.alignment_score,
-            secondary_affinities=[
-                ClusterAffinityDTO(
-                    cluster_id=a.cluster_id,
-                    cluster_name=a.cluster_name,
-                    affinity_score=a.affinity_score,
-                    is_primary=False,
-                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
-                    market_insights=a.market_insights,
-                    compatible_roles=a.compatible_roles,
-                    job_offer_count=a.job_offer_count,
-                    top_skills=a.top_skills,
-                    detected_skills=[
-                        SkillDTO(
-                            name=s.name,
-                            skill_type=s.nature.value,
-                            market_importance="critical"
-                            if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
-                            else (
-                                "high"
-                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
-                                >= 1.0
-                                else "medium"
-                            ),
-                            market_demand_percentage=round(s.frequency * 100)
-                            if s.frequency is not None
-                            else 100,
-                            self_taught=user_skills_map[s.normalized_name].self_taught
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            personal_projects=user_skills_map[s.normalized_name].personal_projects
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            years_of_experience=user_skills_map[
-                                s.normalized_name
-                            ].years_of_experience
-                            if s.normalized_name in user_skills_map
-                            else 0,
-                            has_certification=user_skills_map[s.normalized_name].has_certification
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            ict_score=user_skills_map[s.normalized_name].ict_score
-                            if s.normalized_name in user_skills_map
-                            else 0.0,
-                            trend=determine_trend(s.name),
-                        )
-                        for s in a.detected_skills
-                    ],
-                    skill_gaps=[
-                        SkillDTO(
-                            name=g.skill.name,
-                            skill_type=g.skill.nature.value,
-                            market_importance=g.market_importance,
-                            market_demand_percentage=round(g.skill.frequency * 100)
-                            if g.skill.frequency is not None
-                            else None,
-                            trend=determine_trend(g.skill.name),
-                        )
-                        for g in a.skill_gaps
-                    ],
-                )
-                for a in (secondaries if secondaries else [])
-            ],
-            all_affinities=[
-                ClusterAffinityDTO(
-                    cluster_id=a.cluster_id,
-                    cluster_name=a.cluster_name,
-                    affinity_score=a.affinity_score,
-                    is_primary=(primary and a.cluster_id == primary.cluster_id),
-                    is_evaluated=a.cluster_name.lower() in persisted_cluster_names,
-                    market_insights=a.market_insights,
-                    compatible_roles=a.compatible_roles,
-                    job_offer_count=a.job_offer_count,
-                    top_skills=a.top_skills,
-                    detected_skills=[
-                        SkillDTO(
-                            name=s.name,
-                            skill_type=s.nature.value,
-                            market_importance="critical"
-                            if (s.weight * (s.frequency if s.frequency is not None else 1.0)) >= 2.0
-                            else (
-                                "high"
-                                if (s.weight * (s.frequency if s.frequency is not None else 1.0))
-                                >= 1.0
-                                else "medium"
-                            ),
-                            market_demand_percentage=round(s.frequency * 100)
-                            if s.frequency is not None
-                            else 100,
-                            self_taught=user_skills_map[s.normalized_name].self_taught
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            personal_projects=user_skills_map[s.normalized_name].personal_projects
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            years_of_experience=user_skills_map[
-                                s.normalized_name
-                            ].years_of_experience
-                            if s.normalized_name in user_skills_map
-                            else 0,
-                            has_certification=user_skills_map[s.normalized_name].has_certification
-                            if s.normalized_name in user_skills_map
-                            else False,
-                            ict_score=user_skills_map[s.normalized_name].ict_score
-                            if s.normalized_name in user_skills_map
-                            else 0.0,
-                            trend=determine_trend(s.name),
-                        )
-                        for s in a.detected_skills
-                    ],
-                    skill_gaps=[
-                        SkillDTO(
-                            name=g.skill.name,
-                            skill_type=g.skill.nature.value,
-                            market_importance=g.market_importance,
-                            market_demand_percentage=round(g.skill.frequency * 100)
-                            if g.skill.frequency is not None
-                            else None,
-                            trend=determine_trend(g.skill.name),
-                        )
-                        for g in a.skill_gaps
-                    ],
-                )
-                for a in (all_affinities if all_affinities else [])
-            ],
+            secondary_affinities=secondary_affinities_dto,
+            all_affinities=all_affinities_dto,
             domain_affinities=domain_affinities_dto if domain_affinities_dto else [],
             detected_skills=[
                 SkillDTO(
                     name=s.name,
                     skill_type=s.nature.value,
                     market_importance="consolidated",
-                    market_demand_percentage=round(s.frequency * 100)
-                    if s.frequency is not None
-                    else 100,
+                    market_demand_percentage=_normalize_demand_percentage(s.frequency),
                     self_taught=s.self_taught,
                     personal_projects=s.personal_projects,
                     years_of_experience=s.years_of_experience,
@@ -2566,12 +2430,11 @@ class GetMyProfileUseCase:
                     name=g.skill.name,
                     skill_type=g.skill.nature.value,
                     market_importance=g.market_importance,
-                    market_demand_percentage=round(g.skill.frequency * 100)
-                    if g.skill.frequency is not None
-                    else None,
+                    market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
                     trend=determine_trend(g.skill.name),
                 )
                 for g in profile.skill_gaps
+                if not is_concept_skill(g.skill)
             ],
             full_name=profile.full_name,
             current_job_role=profile.current_job_role,
