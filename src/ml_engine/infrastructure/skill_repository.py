@@ -72,6 +72,12 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
     )
 
 
+import time
+
+_SKILLS_CACHE: list[Skill] | None = None
+_SKILLS_CACHE_TIME: float = 0.0
+_CACHE_TTL = 300.0  # 5 minutes
+
 class SQLSkillRepository(SkillRepository):
     """SQLAlchemy implementation of SkillRepository."""
 
@@ -88,6 +94,11 @@ class SQLSkillRepository(SkillRepository):
         Returns:
             A list of Skill domain entities.
         """
+        global _SKILLS_CACHE, _SKILLS_CACHE_TIME
+        now = time.time()
+        if _SKILLS_CACHE is not None and (now - _SKILLS_CACHE_TIME) < _CACHE_TTL:
+            return _SKILLS_CACHE
+
         result = await self._session.execute(
             select(SkillModel).options(
                 selectinload(SkillModel.aliases),
@@ -98,7 +109,11 @@ class SQLSkillRepository(SkillRepository):
         models = result.scalars().all()
         # Build a name map to resolve target_skill_name without extra queries
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
-        return [_model_to_skill(m, name_map) for m in models]
+        domain_skills = [_model_to_skill(m, name_map) for m in models]
+        
+        _SKILLS_CACHE = domain_skills
+        _SKILLS_CACHE_TIME = now
+        return domain_skills
 
     async def get_skill_graph(self) -> dict[UUID, Skill]:
         """Load the full skill graph into memory as a {skill_id: Skill} dict.
@@ -128,6 +143,9 @@ class SQLSkillRepository(SkillRepository):
         """
         if not skills:
             return []
+            
+        global _SKILLS_CACHE
+        _SKILLS_CACHE = None
 
         models = []
         for s in skills:
@@ -193,6 +211,9 @@ class SQLSkillRepository(SkillRepository):
         """
         if not relations:
             return
+            
+        global _SKILLS_CACHE
+        _SKILLS_CACHE = None
 
         # Fetch existing edges to avoid duplicates
         existing_result = await self._session.execute(select(SkillRelationModel))
