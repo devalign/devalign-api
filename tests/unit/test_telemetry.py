@@ -427,4 +427,9 @@ async def test_combined_llm_extraction_timeout() -> None:
     )
 
     with pytest.raises(MLPipelineError, match="LLM extraction timed out"):
-        await use_case._combined_llm_extraction("Short CV text with enough characters to prompt.")
+        await use_case.extract_llm_insights(
+            user_id=uuid4(),
+            cv_id=uuid4(),
+            cv_text="Short CV text with enough characters to prompt.",
+            already_detected_skills=[],
+        )

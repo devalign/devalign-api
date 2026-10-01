@@ -475,57 +475,13 @@ class ProfileUserFromCVUseCase:
 
         return list(inferred_skills.values())
 
-    async def _combined_llm_extraction(self, cv_text: str) -> dict[str, Any]:
-        """Single streamlined LLM call for core CV extraction with timeout safeguard.
-
-        Extracts: current job role, technical summary, years of experience,
-        and exhaustive technical skills list in one prompt.
-
-        Returns the parsed JSON dict from the LLM.
-        """
-        logger.info("Running combined LLM extraction")
-        cv_text_char_limit = 15000
-        cv_text_for_llm = cv_text[:cv_text_char_limit]
-        prompt = _build_combined_cv_extraction_prompt(cv_text_for_llm)
-
-        try:
-            raw_output = await asyncio.wait_for(
-                self._llm.generate(prompt=prompt, context=[], max_tokens=3000),
-                timeout=45.0,
-            )
-        except TimeoutError as exc:
-            logger.error("LLM extraction timed out after 45 seconds")
-            raise MLPipelineError(
-                "LLM extraction timed out after 45s. Please retry or upload a shorter document."
-            ) from exc
-
-        parsed = _parse_cv_extraction_output(raw_output)
-        if not parsed:
-            raise ValueError("Empty extraction data parsed")
-        if "error" in parsed and parsed["error"] == "not_a_cv":
-            doc_type = parsed.get("document_type", "unknown")
-            raise MLPipelineError(
-                f"The uploaded document does not appear to be a CV/resume "
-                f"(detected as: {doc_type}). "
-                "Please upload a document with your work experience, education, and skills."
-            )
-        return parsed
-
-    async def extract_skills(
+    async def extract_deterministic_data(
         self,
         user_id: UUID,
         cv_id: UUID,
         cv_content: bytes,
         content_type: str,
     ) -> dict[str, Any]:
-        """New Phase 1: Extract text, classify CV, run combined LLM extraction.
-
-        No profile is saved here — extracted data is stored on CVDocument
-        for the frontend to read and requires user validation before persisting.
-
-        Returns a dict with:
-            cv_text, extracted_data
-        """
         logger.info("Extracting CV text", user_id=str(user_id))
         async with TelemetryTracker(
             "cv_parsing",
@@ -564,82 +520,96 @@ class ProfileUserFromCVUseCase:
 
         logger.debug("Document classified as CV", confidence=confidence)
 
-        async with TelemetryTracker(
-            "llm_extraction_phase1",
-            user_id=user_id,
-            initial_metadata={
-                "cv_id": str(cv_id),
-                "classification_confidence": confidence,
-            },
-        ) as llm_tracker:
-            extracted_data = await self._combined_llm_extraction(cv_text)
+        # Deterministic scan
+        all_skills = await self._skills.get_all_skills()
+        direct_catalog_skills = await self._catalog.scan_text_for_catalog_skills(
+            cv_text, existing_skills_cache=all_skills
+        )
 
-            # Pre-normalize extracted skills against Lightcast catalog (Phase 1)
-            raw_llm_skills_count = 0
-            direct_catalog_skills_count = 0
-            if "skills" in extracted_data and isinstance(extracted_data["skills"], list):
-                raw_llm_skills_count = len(extracted_data["skills"])
-                try:
-                    all_skills = await self._skills.get_all_skills()
-                    # Hybrid pipeline: Fast deterministic scan of raw CV text against canonical catalog
-                    direct_catalog_skills = await self._catalog.scan_text_for_catalog_skills(
-                        cv_text, existing_skills_cache=all_skills
-                    )
-                    direct_catalog_skills_count = len(direct_catalog_skills)
-                    combined_skills = list(extracted_data["skills"]) + direct_catalog_skills
-
-                    extracted_data["skills"] = await self._catalog.normalize_extracted_skills(
-                        combined_skills, existing_skills_cache=all_skills
-                    )
-                    logger.info(
-                        "Pre-normalized extracted skills against catalog (hybrid mode)",
-                        count=len(extracted_data["skills"]),
-                        llm_count=raw_llm_skills_count,
-                        direct_scanned_count=direct_catalog_skills_count,
-                    )
-                except Exception as exc:
-                    logger.warning("Failed to pre-normalize skills against catalog", error=str(exc))
-                    if hasattr(self._skills, "_session") and self._skills._session is not None:
-                        try:
-                            await self._skills._session.rollback()
-                        except Exception as rollback_err:
-                            logger.debug("Rollback attempt completed", error=str(rollback_err))
-
-            skills_list = extracted_data.get("skills", [])
-            std_count = sum(
-                1 for s in skills_list if isinstance(s, dict) and not s.get("is_custom", False)
-            )
-            custom_count = sum(
-                1 for s in skills_list if isinstance(s, dict) and s.get("is_custom", False)
-            )
-            total_extracted = len(skills_list) if isinstance(skills_list, list) else 0
-
-            llm_tracker.add_metadata(
-                {
-                    "raw_skills_count": raw_llm_skills_count,
-                    "llm_skills_count": raw_llm_skills_count,
-                    "direct_catalog_skills_count": direct_catalog_skills_count,
-                    "hybrid_total_extracted": total_extracted,
-                    "hybrid_boost_ratio": (
-                        round(direct_catalog_skills_count / total_extracted, 4)
-                        if total_extracted > 0
-                        else 0.0
-                    ),
-                    "total_skills_phase1": total_extracted,
-                    "standard_skills_phase1": std_count,
-                    "custom_skills_phase1": custom_count,
-                    "standardization_ratio_phase1": (
-                        round(std_count / total_extracted, 4) if total_extracted > 0 else 0.0
-                    ),
-                    "role_extracted": extracted_data.get("current_job_role"),
-                    "years_experience": extracted_data.get("years_experience"),
-                }
-            )
+        normalized_skills = await self._catalog.normalize_extracted_skills(
+            direct_catalog_skills, existing_skills_cache=all_skills
+        )
 
         return {
             "cv_text": cv_text,
-            "extracted_data": extracted_data,
+            "extracted_data": {
+                "skills": normalized_skills,
+                "current_job_role": None,
+                "years_experience": None,
+                "professional_summary": None,
+            },
+            "classification_confidence": confidence,
         }
+
+    async def extract_llm_insights(
+        self,
+        user_id: UUID,
+        cv_id: UUID,
+        cv_text: str,
+        already_detected_skills: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        logger.info("Running supplementary LLM extraction")
+
+        skill_names = [str(s.get("name")) for s in already_detected_skills if s.get("name")]
+
+        cv_text_char_limit = 15000
+        cv_text_for_llm = cv_text[:cv_text_char_limit]
+
+        # We will dynamically build the prompt
+        skills_str = ", ".join(skill_names)
+        prompt = f"""You are an expert IT recruiter and CV parser. Analyze the CV text below.
+
+If the text is NOT a CV/resume, respond ONLY with:
+{{"error": "not_a_cv", "document_type": "<brief description>"}}
+
+If it IS a CV, extract the core technical profile strictly following this JSON schema:
+{{
+  "current_job_role": "string or null",
+  "professional_summary": "1-2 sentence technical summary focusing on their primary domain and stack, or null",
+  "years_experience": integer or null,
+  "skills": ["string"]
+}}
+
+EXTRACTION RULES:
+1. SUPPLEMENTARY TECHNICAL EXTRACTION: We already detected the following standard skills: [{skills_str}].
+   DO NOT extract them again.
+   Instead, extract specialized technical competencies, complex architectures, niche frameworks, advanced tools, and specialized methodologies that are NOT in the list above.
+2. DO NOT extract abstract categories (e.g. "Software Engineering", "Full Stack Development").
+3. Return clean, canonical technology names. Respond ONLY with the valid JSON object.
+
+CV TEXT:
+{cv_text_for_llm}
+"""
+        try:
+            raw_output = await asyncio.wait_for(
+                self._llm.generate(prompt=prompt, context=[], max_tokens=1500),
+                timeout=45.0,
+            )
+        except TimeoutError as exc:
+            logger.error("LLM extraction timed out after 45 seconds")
+            raise MLPipelineError(
+                "LLM extraction timed out after 45s. Please retry or upload a shorter document."
+            ) from exc
+
+        parsed = _parse_cv_extraction_output(raw_output)
+        if not parsed:
+            raise ValueError("Empty extraction data parsed")
+        if "error" in parsed and parsed["error"] == "not_a_cv":
+            doc_type = parsed.get("document_type", "unknown")
+            raise MLPipelineError(
+                f"The uploaded document does not appear to be a CV/resume (detected as: {doc_type})."
+            )
+
+        new_skills = parsed.get("skills", [])
+        if new_skills:
+            all_skills = await self._skills.get_all_skills()
+            parsed["skills"] = await self._catalog.normalize_extracted_skills(
+                new_skills, existing_skills_cache=all_skills
+            )
+        else:
+            parsed["skills"] = []
+
+        return parsed
 
     async def finalize_diagnosis(
         self,
@@ -850,6 +820,7 @@ class ProfileUserFromCVUseCase:
 
             diagnosed_profile = dc_replace_profile(
                 profile,
+                cv_id=cv_id,
                 embedding=cv_embedding,
                 detected_skills=detected_skills,
                 seniority=seniority,
@@ -968,12 +939,30 @@ class ProfileUserFromCVUseCase:
         extract_skills + separate finalize_diagnosis steps.
         """
         try:
-            result = await self.extract_skills(
+            phase1_result = await self.extract_deterministic_data(
                 user_id,
                 cv_id,
                 cv_content,
                 content_type,
             )
+            llm_insights = await self.extract_llm_insights(
+                user_id, cv_id, phase1_result["cv_text"], phase1_result["extracted_data"]["skills"]
+            )
+
+            # Merge
+            extracted_data = phase1_result["extracted_data"]
+            extracted_data["current_job_role"] = llm_insights.get("current_job_role")
+            extracted_data["years_experience"] = llm_insights.get("years_experience")
+            extracted_data["professional_summary"] = llm_insights.get("professional_summary")
+            existing_skill_names = {s["name"].lower() for s in extracted_data["skills"]}
+            for s in llm_insights.get("skills", []):
+                if isinstance(s, dict) and "name" in s:
+                    norm_name = s["name"].lower()
+                    if norm_name not in existing_skill_names:
+                        extracted_data["skills"].append(s)
+                        existing_skill_names.add(norm_name)
+
+            result = {"cv_text": phase1_result["cv_text"], "extracted_data": extracted_data}
 
             # Create profile from extracted data so finalize_diagnosis can run
             profile = await self._profiles.get_by_user_id(user_id)
@@ -1113,8 +1102,10 @@ def _cluster_affinity_to_dto(
     is_evaluated: bool = False,
 ) -> ClusterAffinityDTO:
     """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
+    import uuid
+
     return ClusterAffinityDTO(
-        cluster_id=affinity.cluster_id,
+        cluster_id=affinity.cluster_id or uuid.uuid4(),
         cluster_name=affinity.cluster_name,
         affinity_score=affinity.affinity_score,
         is_primary=is_primary,

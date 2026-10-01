@@ -299,29 +299,61 @@ async def run_profile_analysis_task(
                 skill_repository=SQLSkillRepository(session),
             )
 
-            bg_logger.info("Starting LLM extraction", cv_id=str(cv_id))
-            result = await use_case.extract_skills(
+            # --- Phase A: Deterministic Scan ---
+            bg_logger.info("Starting deterministic extraction", cv_id=str(cv_id))
+            phase1_result = await use_case.extract_deterministic_data(
                 user_id=user_id,
                 cv_id=cv_id,
                 cv_content=content,
                 content_type=content_type,
             )
+
+            # Store partial extracted data
+            try:
+                rows = await cv_repo.update_extracted_data(cv_id, phase1_result["extracted_data"])
+            except Exception as e:
+                bg_logger.warning("Retrying update_extracted_data", error=str(e))
+                await session.rollback()
+                rows = await cv_repo.update_extracted_data(cv_id, phase1_result["extracted_data"])
+
+            # Mark as skills_detected_partial
+            bg_logger.info("Setting status to skills_detected_partial", cv_id=str(cv_id))
+            rows = await cv_repo.update_status(cv_id, "skills_detected_partial")
+            await session.commit()
+
+            # --- Phase B: Supplementary LLM Scan ---
+            bg_logger.info("Starting LLM extraction", cv_id=str(cv_id))
+            llm_insights = await use_case.extract_llm_insights(
+                user_id=user_id,
+                cv_id=cv_id,
+                cv_text=phase1_result["cv_text"],
+                already_detected_skills=phase1_result["extracted_data"]["skills"],
+            )
             bg_logger.info("LLM extraction completed", cv_id=str(cv_id))
 
-            # Store extracted_data directly (without touching status)
-            bg_logger.info("Storing extracted data", cv_id=str(cv_id))
-            try:
-                rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
-            except Exception as e:
-                bg_logger.warning(
-                    "Retrying update_extracted_data with rollback safeguard", error=str(e)
-                )
-                await session.rollback()
-                rows = await cv_repo.update_extracted_data(cv_id, result["extracted_data"])
-            if rows == 0:
-                raise RuntimeError(f"Failed to update extracted_data for CV {cv_id}")
+            # Merge results
+            merged_data = phase1_result["extracted_data"]
+            merged_data["current_job_role"] = llm_insights.get("current_job_role")
+            merged_data["years_experience"] = llm_insights.get("years_experience")
+            merged_data["professional_summary"] = llm_insights.get("professional_summary")
 
-            # Mark as skills_detected so the frontend polling picks it up
+            existing_skill_names = {s["name"].lower() for s in merged_data["skills"]}
+            for s in llm_insights.get("skills", []):
+                if isinstance(s, dict) and "name" in s:
+                    norm_name = s["name"].lower()
+                    if norm_name not in existing_skill_names:
+                        merged_data["skills"].append(s)
+                        existing_skill_names.add(norm_name)
+
+            # Store final extracted data
+            bg_logger.info("Storing final merged extracted data", cv_id=str(cv_id))
+            try:
+                rows = await cv_repo.update_extracted_data(cv_id, merged_data)
+            except Exception:
+                await session.rollback()
+                rows = await cv_repo.update_extracted_data(cv_id, merged_data)
+
+            # Mark as skills_detected
             bg_logger.info("Setting status to skills_detected", cv_id=str(cv_id))
             rows = await cv_repo.update_status(cv_id, "skills_detected")
             if rows == 0:
@@ -401,21 +433,6 @@ async def run_profile_analysis_task(
             )
             if attempt < 3 - 1:
                 await asyncio.sleep(2**attempt)
-
-    bg_logger.exception(
-        "Background CV analysis failed after all retries",
-        user_id=str(user_id),
-        error=str(last_db_exc),
-    )
-    try:
-        async with AsyncSessionLocal() as fail_session:
-            cv_repo = SQLAlchemyCVRepository(fail_session)
-            await cv_repo.update_status(cv_id, "failed")
-            await fail_session.commit()
-    except Exception as db_exc:
-        bg_logger.exception(
-            "Failed to update CV status to failed", user_id=str(user_id), error=str(db_exc)
-        )
 
 
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
@@ -502,7 +519,10 @@ async def get_cv_status_by_id(
 
     error_message = getattr(cv, "error_message", None) or None
     extracted_skills = None
-    if cv.status == "skills_detected" and cv.extracted_data is not None:
+    if (
+        cv.status in ("skills_detected", "skills_detected_partial")
+        and cv.extracted_data is not None
+    ):
         raw_skills = cv.extracted_data.get("skills", None)
         if raw_skills is None:
             raw_skills = cv.extracted_data.get("technical_skills", None)

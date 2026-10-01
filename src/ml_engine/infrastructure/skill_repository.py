@@ -1,11 +1,12 @@
 """SQLAlchemy implementation of SkillRepository."""
 
+import time
 from uuid import UUID
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from src.ml_engine.domain.entities import (
     Skill,
@@ -68,8 +69,13 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         relations=relations,
         standards=standards,
         weight=float(m.weight),
-        embedding=m.embedding,
+        embedding=m.__dict__.get("embedding", None),
     )
+
+
+_SKILLS_CACHE: list[Skill] | None = None
+_SKILLS_CACHE_TIME: float = 0.0
+_CACHE_TTL = 300.0  # 5 minutes
 
 
 class SQLSkillRepository(SkillRepository):
@@ -88,8 +94,14 @@ class SQLSkillRepository(SkillRepository):
         Returns:
             A list of Skill domain entities.
         """
+        global _SKILLS_CACHE, _SKILLS_CACHE_TIME
+        now = time.time()
+        if _SKILLS_CACHE is not None and (now - _SKILLS_CACHE_TIME) < _CACHE_TTL:
+            return _SKILLS_CACHE
+
         result = await self._session.execute(
             select(SkillModel).options(
+                defer(SkillModel.embedding),
                 selectinload(SkillModel.aliases),
                 selectinload(SkillModel.outgoing_relations),
                 selectinload(SkillModel.standards),
@@ -98,7 +110,17 @@ class SQLSkillRepository(SkillRepository):
         models = result.scalars().all()
         # Build a name map to resolve target_skill_name without extra queries
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
-        return [_model_to_skill(m, name_map) for m in models]
+        import asyncio
+
+        domain_skills = []
+        for i, m in enumerate(models):
+            domain_skills.append(_model_to_skill(m, name_map))
+            if i % 250 == 0:
+                await asyncio.sleep(0)
+
+        _SKILLS_CACHE = domain_skills
+        _SKILLS_CACHE_TIME = now
+        return domain_skills
 
     async def get_skill_graph(self) -> dict[UUID, Skill]:
         """Load the full skill graph into memory as a {skill_id: Skill} dict.
@@ -128,6 +150,9 @@ class SQLSkillRepository(SkillRepository):
         """
         if not skills:
             return []
+
+        global _SKILLS_CACHE
+        _SKILLS_CACHE = None
 
         models = []
         for s in skills:
@@ -193,6 +218,9 @@ class SQLSkillRepository(SkillRepository):
         """
         if not relations:
             return
+
+        global _SKILLS_CACHE
+        _SKILLS_CACHE = None
 
         # Fetch existing edges to avoid duplicates
         existing_result = await self._session.execute(select(SkillRelationModel))
