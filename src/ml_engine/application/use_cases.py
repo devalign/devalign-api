@@ -820,6 +820,7 @@ CV TEXT:
 
             diagnosed_profile = dc_replace_profile(
                 profile,
+                cv_id=cv_id,
                 embedding=cv_embedding,
                 detected_skills=detected_skills,
                 seniority=seniority,
