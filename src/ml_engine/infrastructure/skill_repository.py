@@ -68,7 +68,7 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
         relations=relations,
         standards=standards,
         weight=float(m.weight),
-        embedding=m.embedding,
+        embedding=m.__dict__.get("embedding", None),
     )
 
 
