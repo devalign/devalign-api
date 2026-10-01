@@ -520,7 +520,7 @@ async def get_cv_status_by_id(
 
     error_message = getattr(cv, "error_message", None) or None
     extracted_skills = None
-    if cv.status == "skills_detected" and cv.extracted_data is not None:
+    if cv.status in ("skills_detected", "skills_detected_partial") and cv.extracted_data is not None:
         raw_skills = cv.extracted_data.get("skills", None)
         if raw_skills is None:
             raw_skills = cv.extracted_data.get("technical_skills", None)
