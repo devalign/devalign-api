@@ -5,7 +5,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, defer
 
 from src.ml_engine.domain.entities import (
     Skill,
@@ -101,6 +101,7 @@ class SQLSkillRepository(SkillRepository):
 
         result = await self._session.execute(
             select(SkillModel).options(
+                defer(SkillModel.embedding),
                 selectinload(SkillModel.aliases),
                 selectinload(SkillModel.outgoing_relations),
                 selectinload(SkillModel.standards),
@@ -109,7 +110,12 @@ class SQLSkillRepository(SkillRepository):
         models = result.scalars().all()
         # Build a name map to resolve target_skill_name without extra queries
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
-        domain_skills = [_model_to_skill(m, name_map) for m in models]
+        import asyncio
+        domain_skills = []
+        for i, m in enumerate(models):
+            domain_skills.append(_model_to_skill(m, name_map))
+            if i % 250 == 0:
+                await asyncio.sleep(0)
         
         _SKILLS_CACHE = domain_skills
         _SKILLS_CACHE_TIME = now
