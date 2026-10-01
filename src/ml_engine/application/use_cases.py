@@ -550,7 +550,7 @@ class ProfileUserFromCVUseCase:
     ) -> dict[str, Any]:
         logger.info("Running supplementary LLM extraction")
 
-        skill_names = [s.get("name") for s in already_detected_skills if s.get("name")]
+        skill_names = [str(s.get("name")) for s in already_detected_skills if s.get("name")]
 
         cv_text_char_limit = 15000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
@@ -938,12 +938,33 @@ CV TEXT:
         extract_skills + separate finalize_diagnosis steps.
         """
         try:
-            result = await self.extract_skills(
+            phase1_result = await self.extract_deterministic_data(
                 user_id,
                 cv_id,
                 cv_content,
                 content_type,
             )
+            llm_insights = await self.extract_llm_insights(
+                user_id,
+                cv_id,
+                phase1_result["cv_text"],
+                phase1_result["extracted_data"]["skills"]
+            )
+            
+            # Merge
+            extracted_data = phase1_result["extracted_data"]
+            extracted_data["current_job_role"] = llm_insights.get("current_job_role")
+            extracted_data["years_experience"] = llm_insights.get("years_experience")
+            extracted_data["professional_summary"] = llm_insights.get("professional_summary")
+            existing_skill_names = {s["name"].lower() for s in extracted_data["skills"]}
+            for s in llm_insights.get("skills", []):
+                if isinstance(s, dict) and "name" in s:
+                    norm_name = s["name"].lower()
+                    if norm_name not in existing_skill_names:
+                        extracted_data["skills"].append(s)
+                        existing_skill_names.add(norm_name)
+                        
+            result = {"cv_text": phase1_result["cv_text"], "extracted_data": extracted_data}
 
             # Create profile from extracted data so finalize_diagnosis can run
             profile = await self._profiles.get_by_user_id(user_id)
@@ -1083,8 +1104,9 @@ def _cluster_affinity_to_dto(
     is_evaluated: bool = False,
 ) -> ClusterAffinityDTO:
     """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
+    import uuid
     return ClusterAffinityDTO(
-        cluster_id=affinity.cluster_id,
+        cluster_id=affinity.cluster_id or uuid.uuid4(),
         cluster_name=affinity.cluster_name,
         affinity_score=affinity.affinity_score,
         is_primary=is_primary,
