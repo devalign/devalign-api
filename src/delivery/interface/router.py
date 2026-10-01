@@ -435,7 +435,6 @@ async def run_profile_analysis_task(
                 await asyncio.sleep(2**attempt)
 
 
-
 @router.get("/cv/status", response_model=CVStatusDTO, summary="Get active CV processing status")
 async def get_cv_status(
     current_user_id: CurrentUserIdDep,
@@ -520,7 +519,10 @@ async def get_cv_status_by_id(
 
     error_message = getattr(cv, "error_message", None) or None
     extracted_skills = None
-    if cv.status in ("skills_detected", "skills_detected_partial") and cv.extracted_data is not None:
+    if (
+        cv.status in ("skills_detected", "skills_detected_partial")
+        and cv.extracted_data is not None
+    ):
         raw_skills = cv.extracted_data.get("skills", None)
         if raw_skills is None:
             raw_skills = cv.extracted_data.get("technical_skills", None)

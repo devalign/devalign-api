@@ -1,11 +1,12 @@
 """SQLAlchemy implementation of SkillRepository."""
 
+import time
 from uuid import UUID
 
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, defer
+from sqlalchemy.orm import defer, selectinload
 
 from src.ml_engine.domain.entities import (
     Skill,
@@ -72,11 +73,10 @@ def _model_to_skill(m: SkillModel, name_map: dict[UUID, str] | None = None) -> S
     )
 
 
-import time
-
 _SKILLS_CACHE: list[Skill] | None = None
 _SKILLS_CACHE_TIME: float = 0.0
 _CACHE_TTL = 300.0  # 5 minutes
+
 
 class SQLSkillRepository(SkillRepository):
     """SQLAlchemy implementation of SkillRepository."""
@@ -111,12 +111,13 @@ class SQLSkillRepository(SkillRepository):
         # Build a name map to resolve target_skill_name without extra queries
         name_map: dict[UUID, str] = {m.skill_id: m.name for m in models}
         import asyncio
+
         domain_skills = []
         for i, m in enumerate(models):
             domain_skills.append(_model_to_skill(m, name_map))
             if i % 250 == 0:
                 await asyncio.sleep(0)
-        
+
         _SKILLS_CACHE = domain_skills
         _SKILLS_CACHE_TIME = now
         return domain_skills
@@ -149,7 +150,7 @@ class SQLSkillRepository(SkillRepository):
         """
         if not skills:
             return []
-            
+
         global _SKILLS_CACHE
         _SKILLS_CACHE = None
 
@@ -217,7 +218,7 @@ class SQLSkillRepository(SkillRepository):
         """
         if not relations:
             return
-            
+
         global _SKILLS_CACHE
         _SKILLS_CACHE = None
 

@@ -572,7 +572,7 @@ If it IS a CV, extract the core technical profile strictly following this JSON s
 
 EXTRACTION RULES:
 1. SUPPLEMENTARY TECHNICAL EXTRACTION: We already detected the following standard skills: [{skills_str}].
-   DO NOT extract them again. 
+   DO NOT extract them again.
    Instead, extract specialized technical competencies, complex architectures, niche frameworks, advanced tools, and specialized methodologies that are NOT in the list above.
 2. DO NOT extract abstract categories (e.g. "Software Engineering", "Full Stack Development").
 3. Return clean, canonical technology names. Respond ONLY with the valid JSON object.
@@ -946,12 +946,9 @@ CV TEXT:
                 content_type,
             )
             llm_insights = await self.extract_llm_insights(
-                user_id,
-                cv_id,
-                phase1_result["cv_text"],
-                phase1_result["extracted_data"]["skills"]
+                user_id, cv_id, phase1_result["cv_text"], phase1_result["extracted_data"]["skills"]
             )
-            
+
             # Merge
             extracted_data = phase1_result["extracted_data"]
             extracted_data["current_job_role"] = llm_insights.get("current_job_role")
@@ -964,7 +961,7 @@ CV TEXT:
                     if norm_name not in existing_skill_names:
                         extracted_data["skills"].append(s)
                         existing_skill_names.add(norm_name)
-                        
+
             result = {"cv_text": phase1_result["cv_text"], "extracted_data": extracted_data}
 
             # Create profile from extracted data so finalize_diagnosis can run
@@ -1106,6 +1103,7 @@ def _cluster_affinity_to_dto(
 ) -> ClusterAffinityDTO:
     """Helper to convert a ClusterAffinity domain entity into a ClusterAffinityDTO."""
     import uuid
+
     return ClusterAffinityDTO(
         cluster_id=affinity.cluster_id or uuid.uuid4(),
         cluster_name=affinity.cluster_name,
