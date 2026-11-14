@@ -166,69 +166,7 @@ class SQLUserProfileRepository(UserProfileRepository):
             all_affinities = [profile.primary_affinity, *profile.secondary_affinities]
 
         all_affinities = [a for a in all_affinities if a.cluster_name != "Sin Diagnóstico"]
-
-        all_skill_names: set[str] = set()
-        for affinity in all_affinities:
-            for s in affinity.detected_skills:
-                all_skill_names.add(s.name)
-            for g in affinity.skill_gaps:
-                all_skill_names.add(g.skill.name)
-
-        db_all_skills = {}
-        if all_skill_names:
-            db_skills_result = await self._session.execute(
-                select(SkillModel).where(SkillModel.name.in_(list(all_skill_names)))
-            )
-            db_all_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
-
-        for skill_name in all_skill_names:
-            norm_name = skill_name.lower()
-            if norm_name not in db_all_skills:
-                new_skill_model = SkillModel(
-                    skill_id=uuid4(),
-                    name=skill_name,
-                    status="pending_review",
-                    nature=SkillNature.TECH.value,
-                    weight=1.0,
-                    domain_tags=[],
-                    core_domains=[],
-                )
-                self._session.add(new_skill_model)
-                db_all_skills[norm_name] = new_skill_model
-
-        for affinity in all_affinities:
-            diagnostic_model = DiagnosticModel(
-                diagnostic_id=uuid4(),
-                profile_id=profile_model.profile_id,
-                detected_cluster_id=affinity.cluster_id,
-                affinity_score=affinity.affinity_score,
-            )
-            self._session.add(diagnostic_model)
-
-            for skill in affinity.detected_skills:
-                skill_model = db_all_skills[skill.name.lower()]
-                diag_skill = DiagnosticSkillModel(
-                    diagnostic_skill_id=uuid4(),
-                    diagnostic_id=diagnostic_model.diagnostic_id,
-                    skill_id=skill_model.skill_id,
-                    skill_status="consolidated",
-                    importance_score=skill.frequency,
-                )
-                self._session.add(diag_skill)
-
-            for gap in affinity.skill_gaps:
-                skill_model = db_all_skills[gap.skill.name.lower()]
-                diag_skill = DiagnosticSkillModel(
-                    diagnostic_skill_id=uuid4(),
-                    diagnostic_id=diagnostic_model.diagnostic_id,
-                    skill_id=skill_model.skill_id,
-                    skill_status="gap",
-                    importance_score=gap.skill.frequency,
-                )
-                self._session.add(diag_skill)
-
-        await self._session.flush()
-
+        await self._persist_affinities_diagnostics(profile_model.profile_id, all_affinities)
         return profile
 
     async def get_by_user_id(self, user_id: UUID) -> UserProfile | None:
@@ -458,11 +396,24 @@ class SQLUserProfileRepository(UserProfileRepository):
         if existing.scalar_one_or_none():
             return
 
+        await self._persist_affinities_diagnostics(profile_model.profile_id, [affinity])
+
+    async def _persist_affinities_diagnostics(
+        self, profile_id: UUID, affinities: list[ClusterAffinity]
+    ) -> None:
+        """Persist cluster diagnostics, skills, and gaps for given affinities."""
+        valid_affinities = [
+            a for a in affinities if a.cluster_id and a.cluster_name != "Sin Diagnóstico"
+        ]
+        if not valid_affinities:
+            return
+
         all_skill_names: set[str] = set()
-        for s in affinity.detected_skills:
-            all_skill_names.add(s.name)
-        for g in affinity.skill_gaps:
-            all_skill_names.add(g.skill.name)
+        for affinity in valid_affinities:
+            for s in affinity.detected_skills:
+                all_skill_names.add(s.name)
+            for g in affinity.skill_gaps:
+                all_skill_names.add(g.skill.name)
 
         db_all_skills = {}
         if all_skill_names:
@@ -486,35 +437,36 @@ class SQLUserProfileRepository(UserProfileRepository):
                 self._session.add(new_skill_model)
                 db_all_skills[norm_name] = new_skill_model
 
-        diagnostic_model = DiagnosticModel(
-            diagnostic_id=uuid4(),
-            profile_id=profile_model.profile_id,
-            detected_cluster_id=affinity.cluster_id,
-            affinity_score=affinity.affinity_score,
-        )
-        self._session.add(diagnostic_model)
-
-        for skill in affinity.detected_skills:
-            skill_model = db_all_skills[skill.name.lower()]
-            diag_skill = DiagnosticSkillModel(
-                diagnostic_skill_id=uuid4(),
-                diagnostic_id=diagnostic_model.diagnostic_id,
-                skill_id=skill_model.skill_id,
-                skill_status="consolidated",
-                importance_score=skill.frequency,
+        for affinity in valid_affinities:
+            diagnostic_model = DiagnosticModel(
+                diagnostic_id=uuid4(),
+                profile_id=profile_id,
+                detected_cluster_id=affinity.cluster_id,
+                affinity_score=affinity.affinity_score,
             )
-            self._session.add(diag_skill)
+            self._session.add(diagnostic_model)
 
-        for gap in affinity.skill_gaps:
-            skill_model = db_all_skills[gap.skill.name.lower()]
-            diag_skill = DiagnosticSkillModel(
-                diagnostic_skill_id=uuid4(),
-                diagnostic_id=diagnostic_model.diagnostic_id,
-                skill_id=skill_model.skill_id,
-                skill_status="gap",
-                importance_score=gap.skill.frequency,
-            )
-            self._session.add(diag_skill)
+            for skill in affinity.detected_skills:
+                skill_model = db_all_skills[skill.name.lower()]
+                diag_skill = DiagnosticSkillModel(
+                    diagnostic_skill_id=uuid4(),
+                    diagnostic_id=diagnostic_model.diagnostic_id,
+                    skill_id=skill_model.skill_id,
+                    skill_status="consolidated",
+                    importance_score=skill.frequency,
+                )
+                self._session.add(diag_skill)
+
+            for gap in affinity.skill_gaps:
+                skill_model = db_all_skills[gap.skill.name.lower()]
+                diag_skill = DiagnosticSkillModel(
+                    diagnostic_skill_id=uuid4(),
+                    diagnostic_id=diagnostic_model.diagnostic_id,
+                    skill_id=skill_model.skill_id,
+                    skill_status="gap",
+                    importance_score=gap.skill.frequency,
+                )
+                self._session.add(diag_skill)
 
         await self._session.flush()
 
