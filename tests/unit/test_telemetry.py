@@ -431,5 +431,4 @@ async def test_combined_llm_extraction_timeout() -> None:
             user_id=uuid4(),
             cv_id=uuid4(),
             cv_text="Short CV text with enough characters to prompt.",
-            already_detected_skills=[],
         )

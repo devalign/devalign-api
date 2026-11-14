@@ -273,23 +273,14 @@ async def run_profile_analysis_task(
                 user_id=user_id,
                 cv_id=cv_id,
                 cv_text=phase1_result["cv_text"],
-                already_detected_skills=phase1_result["extracted_data"]["skills"],
             )
             bg_logger.info("LLM extraction completed", cv_id=str(cv_id))
 
-            # Merge results
+            # Merge results — global profile metadata synthesized by LLM
             merged_data = phase1_result["extracted_data"]
             merged_data["current_job_role"] = llm_insights.get("current_job_role")
             merged_data["years_experience"] = llm_insights.get("years_experience")
             merged_data["professional_summary"] = llm_insights.get("professional_summary")
-
-            existing_skill_names = {s["name"].lower() for s in merged_data["skills"]}
-            for s in llm_insights.get("skills", []):
-                if isinstance(s, dict) and "name" in s:
-                    norm_name = s["name"].lower()
-                    if norm_name not in existing_skill_names:
-                        merged_data["skills"].append(s)
-                        existing_skill_names.add(norm_name)
 
             # Store final extracted data
             bg_logger.info("Storing final merged extracted data", cv_id=str(cv_id))
@@ -787,4 +778,4 @@ async def delete_account(
     await use_case.execute(UUID(current_user_id))
 
     admin_client = get_supabase_admin_client()
-    admin_client.auth.admin.delete_user(current_user_id)
+    await asyncio.to_thread(admin_client.auth.admin.delete_user, current_user_id)

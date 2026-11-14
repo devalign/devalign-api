@@ -546,17 +546,12 @@ class ProfileUserFromCVUseCase:
         user_id: UUID,
         cv_id: UUID,
         cv_text: str,
-        already_detected_skills: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        logger.info("Running supplementary LLM extraction")
-
-        skill_names = [str(s.get("name")) for s in already_detected_skills if s.get("name")]
+        logger.info("Running profile synthesis LLM extraction")
 
         cv_text_char_limit = 15000
         cv_text_for_llm = cv_text[:cv_text_char_limit]
 
-        # We will dynamically build the prompt
-        skills_str = ", ".join(skill_names)
         prompt = f"""You are an expert IT recruiter and CV parser. Analyze the CV text below.
 
 If the text is NOT a CV/resume, respond ONLY with:
@@ -566,29 +561,27 @@ If it IS a CV, extract the core technical profile strictly following this JSON s
 {{
   "current_job_role": "string or null",
   "professional_summary": "1-2 sentence technical summary focusing on their primary domain and stack, or null",
-  "years_experience": integer or null,
-  "skills": ["string"]
+  "years_experience": integer or null
 }}
 
 EXTRACTION RULES:
-1. SUPPLEMENTARY TECHNICAL EXTRACTION: We already detected the following standard skills: [{skills_str}].
-   DO NOT extract them again.
-   Instead, extract specialized technical competencies, complex architectures, niche frameworks, advanced tools, and specialized methodologies that are NOT in the list above.
-2. DO NOT extract abstract categories (e.g. "Software Engineering", "Full Stack Development").
-3. Return clean, canonical technology names. Respond ONLY with the valid JSON object.
+1. Estimate total professional experience in years as an integer (e.g. 5).
+2. Infer current or most recent job title/role (e.g. "Senior Backend Developer").
+3. Synthesize a concise 1-2 sentence professional summary highlighting their core strengths and primary stack.
+4. Respond ONLY with the valid JSON object.
 
 CV TEXT:
 {cv_text_for_llm}
 """
         try:
             raw_output = await asyncio.wait_for(
-                self._llm.generate(prompt=prompt, context=[], max_tokens=1500),
-                timeout=45.0,
+                self._llm.generate(prompt=prompt, context=[], max_tokens=300),
+                timeout=15.0,
             )
         except TimeoutError as exc:
-            logger.error("LLM extraction timed out after 45 seconds")
+            logger.error("LLM extraction timed out after 15 seconds")
             raise MLPipelineError(
-                "LLM extraction timed out after 45s. Please retry or upload a shorter document."
+                "LLM extraction timed out after 15s. Please retry or upload a shorter document."
             ) from exc
 
         parsed = _parse_cv_extraction_output(raw_output)
@@ -600,16 +593,11 @@ CV TEXT:
                 f"The uploaded document does not appear to be a CV/resume (detected as: {doc_type})."
             )
 
-        new_skills = parsed.get("skills", [])
-        if new_skills:
-            all_skills = await self._skills.get_all_skills()
-            parsed["skills"] = await self._catalog.normalize_extracted_skills(
-                new_skills, existing_skills_cache=all_skills
-            )
-        else:
-            parsed["skills"] = []
-
-        return parsed
+        return {
+            "current_job_role": parsed.get("current_job_role"),
+            "years_experience": parsed.get("years_experience"),
+            "professional_summary": parsed.get("professional_summary"),
+        }
 
     async def finalize_diagnosis(
         self,
@@ -945,22 +933,13 @@ CV TEXT:
                 cv_content,
                 content_type,
             )
-            llm_insights = await self.extract_llm_insights(
-                user_id, cv_id, phase1_result["cv_text"], phase1_result["extracted_data"]["skills"]
-            )
+            llm_insights = await self.extract_llm_insights(user_id, cv_id, phase1_result["cv_text"])
 
             # Merge
             extracted_data = phase1_result["extracted_data"]
             extracted_data["current_job_role"] = llm_insights.get("current_job_role")
             extracted_data["years_experience"] = llm_insights.get("years_experience")
             extracted_data["professional_summary"] = llm_insights.get("professional_summary")
-            existing_skill_names = {s["name"].lower() for s in extracted_data["skills"]}
-            for s in llm_insights.get("skills", []):
-                if isinstance(s, dict) and "name" in s:
-                    norm_name = s["name"].lower()
-                    if norm_name not in existing_skill_names:
-                        extracted_data["skills"].append(s)
-                        existing_skill_names.add(norm_name)
 
             result = {"cv_text": phase1_result["cv_text"], "extracted_data": extracted_data}
 
