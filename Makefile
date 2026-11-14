@@ -17,8 +17,8 @@ help:
 	@echo "  make type-check   Run mypy strict type checking"
 	@echo "  make check        Run lint + type-check + tests (full CI)"
 	@echo "  make migrate      Run pending Alembic migrations"
-	@echo "  make seed         Seed pgvector with SFIA9/SWECOM documents"
-	@echo "  make seed-demo    Seed local DB with clusters and key skills"
+	@echo "  make seed         Seed database with Lightcast skills taxonomy"
+	@echo "  make seed-demo    Seed database with standard skill taxonomy"
 	@echo ""
 
 install:
@@ -51,10 +51,10 @@ migrate-create:
 	@read -p "Migration message: " msg; uv run alembic revision --autogenerate -m "$$msg"
 
 seed:
-	uv run python scripts/seed_vectors.py
+	uv run python scripts/seed_lightcast_skills.py
 
 seed-demo:
-	uv run python scripts/seed_demo_data.py
+	uv run python scripts/seed_skill_taxonomy.py
 
 docker-up:
 	docker compose up --build

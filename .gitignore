@@ -42,4 +42,6 @@ alembic/versions/*.pyc
 
 # Local scratch and debug files
 scratch/
+*.stackdump
+test_cv.*
 

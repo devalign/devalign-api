@@ -69,6 +69,13 @@ dev = [
 target-version = "py312"
 line-length = 100
 src = ["src", "tests"]
+exclude = [
+    "alembic",
+    "scripts",
+    ".venv",
+    ".git",
+    "__pycache__",
+]
 
 [tool.ruff.lint]
 select = [
