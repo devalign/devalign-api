@@ -88,13 +88,30 @@ async def update_my_skills(
                 frequency=0.1,
                 domain_tags=db_skill.domain_tags or [],
                 core_domains=db_skill.core_domains or [],
+                self_taught=s.self_taught,
+                personal_projects=s.personal_projects,
+                years_of_experience=s.years_of_experience,
+                has_certification=s.has_certification,
+                is_custom=s.is_custom,
             )
         else:
             skill_entity = Skill(
                 name=s.name,
                 nature=nature_val,
                 normalized_name=s.name.lower().replace(" ", "").replace(".", ""),
+                self_taught=s.self_taught,
+                personal_projects=s.personal_projects,
+                years_of_experience=s.years_of_experience,
+                has_certification=s.has_certification,
+                is_custom=s.is_custom,
             )
+
+        from dataclasses import replace as dc_replace_skill
+
+        computed_ict = (
+            s.ict_score if s.ict_score > 0.0 else skill_entity.calculate_ict(profile.seniority)
+        )
+        skill_entity = dc_replace_skill(skill_entity, ict_score=computed_ict)
         detected_skills.append(skill_entity)
 
     # 2. Recalcular Diagnóstico Activo y Top 3 Afinidad

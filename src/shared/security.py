@@ -17,19 +17,18 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def decode_jwt_token(token: str) -> dict[str, object]:
-    """Decode and validate a Supabase JWT token."""
-    try:
-        # Verify signature if SUPABASE_JWT_SECRET is provided and we are not in development.
-        # This prevents 401 errors in production if the JWT secret is not configured,
-        # but enforces it if the secret is provided.
-        verify_sig = bool(settings.SUPABASE_JWT_SECRET) and not settings.is_development
-        key = settings.SUPABASE_JWT_SECRET if verify_sig else settings.SUPABASE_ANON_KEY
+    """Decode and validate a Supabase JWT token with strict signature verification."""
+    secret = settings.SUPABASE_JWT_SECRET or settings.SECRET_KEY
+    if not secret:
+        logger.error("Neither SUPABASE_JWT_SECRET nor SECRET_KEY is configured")
+        raise AuthenticationError("Authentication service configuration error")
 
+    try:
         payload: dict[str, object] = jwt.decode(
             token,
-            key,
+            secret,
             algorithms=["HS256", "RS256"],
-            options={"verify_aud": False, "verify_signature": verify_sig},
+            options={"verify_aud": False, "verify_signature": True},
         )
         return payload
     except JWTError as exc:

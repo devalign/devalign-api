@@ -68,8 +68,8 @@ class Skill:
     """A technical skill extracted from job offers or CVs."""
 
     name: str
-    nature: SkillNature
-    normalized_name: str  # lowercase, no spaces (e.g. "react.js" → "reactjs")
+    nature: SkillNature = SkillNature.TECH
+    normalized_name: str = ""  # lowercase, no spaces (e.g. "react.js" → "reactjs")
     domain_tags: list[str] = field(default_factory=list)
     core_domains: list[str] = field(default_factory=list)
     aliases: list[str] = field(default_factory=list)
@@ -92,7 +92,19 @@ class Skill:
     ict_score: float = 0.0
     is_custom: bool = False
 
+    def __post_init__(self) -> None:
+        if not self.normalized_name:
+            object.__setattr__(
+                self, "normalized_name", self.name.lower().replace(" ", "").replace(".", "")
+            )
+
     def calculate_ict(self, global_seniority: SeniorityLevel | None = None) -> float:
+        """Compute ICT (Índice de Competencia Técnica) score (0.0 to 10.0).
+
+        - Professional Experience: Max 5.0 pts (diminishing returns scale)
+        - Code & Personal Projects: Max 3.0 pts
+        - Training & Certifications: Max 2.0 pts (Self-taught/courses +1.0, Certifications +2.0, cap 2.0)
+        """
         exp = self.years_of_experience
 
         # Heuristic scaling: align baseline skill experience with candidate seniority if exp not provided
@@ -104,16 +116,25 @@ class Skill:
             elif global_seniority == SeniorityLevel.MID:
                 exp = 2
 
-        exp_points = 3.0 * exp
-        cert_points = 4.0 if self.has_certification else 0.0
-        projects_points = 2.0 if self.personal_projects else 0.0
-        self_taught_points = 1.0 if self.self_taught else 0.0
+        if exp >= 5:
+            exp_points = 5.0
+        elif exp == 4:
+            exp_points = 4.7
+        elif exp == 3:
+            exp_points = 4.2
+        elif exp == 2:
+            exp_points = 3.5
+        elif exp == 1:
+            exp_points = 2.5
+        else:
+            exp_points = 0.0
 
-        raw_score = exp_points + cert_points + projects_points + self_taught_points
-        if raw_score <= 0.0 and exp > 0:
-            raw_score = 3.0 * exp
+        projects_points = 3.0 if self.personal_projects else 0.0
+        training_points = min(
+            2.0, (1.0 if self.self_taught else 0.0) + (2.0 if self.has_certification else 0.0)
+        )
 
-        return float(min(10.0, max(1.0, round(raw_score, 1))))
+        return float(round(min(10.0, exp_points + projects_points + training_points), 1))
 
 
 @dataclass(frozen=True)
