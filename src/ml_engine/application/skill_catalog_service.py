@@ -26,6 +26,122 @@ PROFILE_SKILL_BLACKLIST: frozenset[str] = frozenset(
     }
 )
 
+# Generic occupational/prose terms and malformed Lightcast catalog entries that
+# collide with non-skill text during free-form CV scanning (derived from catalog
+# audit and linguistic ambiguity, independent of evaluation CVs).
+CATALOG_SCAN_STOPLIST: frozenset[str] = frozenset(
+    {
+        # Generic job-title / prose nouns & adjectives
+        "access",
+        "accesibilidad",
+        "api",
+        "apis",
+        "automation",
+        "bull",
+        "cloud",
+        "dashboards",
+        "developer",
+        "hexagonal",
+        "logging",
+        "net",
+        "office",
+        "productivity",
+        "programming",
+        "redes",
+        "server-side",
+        "software",
+        "word",
+        # Malformed / unbalanced Lightcast entries
+        "efargt",
+        "efarst",
+        "ertjk",
+        "njm",
+        "qc)",
+        "waefgr",
+    }
+)
+
+# Short terms (<= 5 chars) whose lowercase forms are ordinary English/Spanish
+# words or ambiguous tokens; require exact uppercase match in CV text.
+CASE_SENSITIVE_SHORT_AMBIGUOUS: frozenset[str] = frozenset(
+    {
+        "3m",
+        "ace",
+        "act",
+        "ada",
+        "asp",
+        "avg",
+        "cat",
+        "rest",
+        "sap",
+        "solid",
+    }
+)
+
+# Standard industry aliases guaranteed during deterministic CV text scan
+# (keyed by canonical lowercase skill name).
+CATALOG_SCAN_SUPPLEMENTAL_ALIASES: dict[str, tuple[str, ...]] = {
+    ".net development": (".net",),
+    "amazon s3": ("aws s3", "s3"),
+    "amazon web services": ("aws",),
+    "apache maven": ("maven",),
+    "apple ios": ("ios",),
+    "aws elastic mapreduce (emr)": ("aws emr", "emr"),
+    "google cloud platform (gcp)": ("gcp", "google cloud"),
+    "kubernetes": ("k8s",),
+    "microsoft azure": ("azure",),
+    "oauth": ("oauth2", "oauth 2.0"),
+    "postgresql": ("postgres",),
+    "restful api": ("rest api", "restful apis", "rest apis"),
+}
+
+_GENERIC_SINGLE_QUALIFIERS: frozenset[str] = frozenset(
+    {
+        "cloud",
+        "data",
+        "design",
+        "framework",
+        "language",
+        "library",
+        "mobile",
+        "platform",
+        "programming",
+        "software",
+        "system",
+        "tool",
+        "unix",
+        "web",
+    }
+)
+
+
+def _is_ontological_qualifier_alias(skill_name: str, alias: str) -> bool:
+    """Return True when an alias merely repeats a skill's ontological category qualifier.
+
+    For example, '3M (Software)' -> 'Software' or 'Chip Multithreading (Server Architecture)'
+    -> 'Server Architecture' are category labels, whereas 'HTML' in 'HyperText Markup Language (HTML)'
+    is a valid technical acronym.
+    """
+    match = re.match(r"^.+?\s*\(([^)]+)\)\s*$", skill_name.strip())
+    if not match:
+        return False
+    qualifier = match.group(1).strip()
+    if alias.strip().lower() != qualifier.lower():
+        return False
+    if " " in qualifier or len(qualifier) > 6:
+        return True
+    return qualifier.lower() in _GENERIC_SINGLE_QUALIFIERS
+
+
+def _build_cross_skill_base_map(skills: list[Skill]) -> dict[str, set[str]]:
+    """Map base skill names (lowercase) to the canonical skill names that own them."""
+    base_map: dict[str, set[str]] = {}
+    for skill in skills:
+        base = re.sub(r"\s*\(.*?\)\s*", "", skill.name).strip().lower()
+        if base:
+            base_map.setdefault(base, set()).add(skill.name.lower())
+    return base_map
+
 
 def build_skill_lookup_indexes(
     skills: list[Skill],
@@ -308,6 +424,7 @@ class SkillCatalogService:
             existing_skills = await self._skills.get_all_skills()
 
         text_lower = text.lower()
+        cross_skill_bases = _build_cross_skill_base_map(existing_skills)
         matched_skills: dict[str, Skill] = {}
 
         for skill in existing_skills:
@@ -316,34 +433,56 @@ class SkillCatalogService:
             if not base_name or len(base_name) < 2:
                 continue
 
+            skill_lower = skill.name.strip().lower()
             base_lower = base_name.lower()
-            if base_lower in PROFILE_SKILL_BLACKLIST:
+            if (
+                skill_lower in PROFILE_SKILL_BLACKLIST
+                or base_lower in PROFILE_SKILL_BLACKLIST
+                or skill_lower in CATALOG_SCAN_STOPLIST
+                or base_lower in CATALOG_SCAN_STOPLIST
+            ):
                 continue
 
-            terms_to_search = [base_name] + [a for a in skill.aliases if a and len(a) >= 2]
+            filtered_aliases = [
+                a
+                for a in skill.aliases
+                if a
+                and len(a.strip()) >= 2
+                and not _is_ontological_qualifier_alias(skill.name, a)
+                and not (
+                    a.strip().lower() in cross_skill_bases
+                    and skill_lower not in cross_skill_bases[a.strip().lower()]
+                )
+            ]
+            supplemental = CATALOG_SCAN_SUPPLEMENTAL_ALIASES.get(skill_lower, ())
+            terms_to_search = [base_name, *filtered_aliases, *supplemental]
 
             found = False
             for term in terms_to_search:
                 term_clean = term.strip()
                 term_lower = term_clean.lower()
-                if term_lower in PROFILE_SKILL_BLACKLIST:
+                if term_lower in PROFILE_SKILL_BLACKLIST or term_lower in CATALOG_SCAN_STOPLIST:
                     continue
 
-                if len(term_clean) <= 2:
-                    # For short acronyms / 2-char languages (e.g. C#, GO, JS, TS, R), use case-sensitive word boundary
-                    pattern = r"(?<!\w)" + re.escape(term_clean) + r"(?!\w)"
+                if len(term_clean) <= 2 or term_lower in CASE_SENSITIVE_SHORT_AMBIGUOUS:
+                    # Short acronyms and prose-ambiguous abbreviations require exact uppercase/case-sensitive match
+                    target_term = (
+                        term_clean.upper()
+                        if term_lower in CASE_SENSITIVE_SHORT_AMBIGUOUS and term_clean.islower()
+                        else term_clean
+                    )
+                    pattern = r"(?<!\w)" + re.escape(target_term) + r"(?!\w)"
                     if re.search(pattern, text):
                         found = True
                         break
-                elif len(term_clean) >= 3:
-                    # Case-insensitive word boundary match
+                else:
                     pattern = r"(?<!\w)" + re.escape(term_lower) + r"(?!\w)"
                     if re.search(pattern, text_lower):
                         found = True
                         break
 
             if found:
-                matched_skills[skill.name.lower()] = skill
+                matched_skills[skill_lower] = skill
 
         results: list[dict[str, Any]] = []
         for sk in matched_skills.values():

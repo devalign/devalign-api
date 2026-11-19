@@ -7,7 +7,9 @@ from uuid import UUID, uuid4
 import pytest
 
 from src.delivery.interface.router import delete_account, run_profile_analysis_task
+from src.ml_engine.application.skill_catalog_service import SkillCatalogService
 from src.ml_engine.application.use_cases import ProfileUserFromCVUseCase
+from src.ml_engine.domain.entities import Skill, SkillNature
 from src.shared.exceptions import MLPipelineError
 
 
@@ -175,3 +177,88 @@ async def test_delete_account_endpoint(monkeypatch):
 
     mock_use_case.execute.assert_awaited_once_with(UUID(user_id))
     mock_admin.auth.admin.delete_user.assert_called_once_with(user_id)
+
+
+@pytest.mark.asyncio
+async def test_scan_text_filters_dirty_aliases_and_generic_terms():
+    """Catalog scan blocks generic prose nouns, category qualifiers, and colliding aliases."""
+    catalog = [
+        Skill(name="3M (Software)", nature=SkillNature.TECH, aliases=["3M", "Software"]),
+        Skill(name="Bitbucket", nature=SkillNature.TECH, aliases=["github", "bitbucket"]),
+        Skill(name="GitHub", nature=SkillNature.TECH, aliases=["github"]),
+        Skill(name="Java APIs", nature=SkillNature.TECH, aliases=["apis"]),
+        Skill(
+            name="Application Programming Interface (API)",
+            nature=SkillNature.TECH,
+            aliases=["API", "Application Programming Interface"],
+        ),
+        Skill(name="Developer", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="Automation", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="Cloud", nature=SkillNature.TECH, aliases=[]),
+        Skill(
+            name="Chip Multithreading (Server Architecture)",
+            nature=SkillNature.TECH,
+            aliases=["Chip Multithreading", "Server Architecture"],
+        ),
+        Skill(name=".NET Development", nature=SkillNature.TECH, aliases=["net"]),
+        Skill(name="SOLID", nature=SkillNature.CONCEPT, aliases=["solid"]),
+        Skill(name="RESTful API", nature=SkillNature.TECH, aliases=["rest", "rest api"]),
+        Skill(name="Python (Programming Language)", nature=SkillNature.TECH, aliases=["python"]),
+    ]
+
+    service = SkillCatalogService(skill_repository=MagicMock(), llm_service=MagicMock())
+    cv_text = (
+        "Senior Software Developer at CloudScale. Built test automation and RESTful APIs "
+        "with Python, GitHub, and Server Architecture. Solid experience for the rest of the net."
+    )
+
+    results = await service.scan_text_for_catalog_skills(cv_text, existing_skills_cache=catalog)
+    found_names = {r["name"] for r in results}
+
+    assert "Python (Programming Language)" in found_names
+    assert "GitHub" in found_names
+    assert "RESTful API" in found_names
+
+    # Ensure false positives are blocked
+    assert "3M (Software)" not in found_names
+    assert "Bitbucket" not in found_names
+    assert "Java APIs" not in found_names
+    assert "Application Programming Interface (API)" not in found_names
+    assert "Developer" not in found_names
+    assert "Automation" not in found_names
+    assert "Cloud" not in found_names
+    assert "Chip Multithreading (Server Architecture)" not in found_names
+    assert ".NET Development" not in found_names
+    assert "SOLID" not in found_names
+
+
+@pytest.mark.asyncio
+async def test_scan_text_resolves_standard_aliases_and_case_sensitive_short_terms():
+    """Catalog scan matches AWS/Azure/Maven/OAuth2/EMR and respects uppercase short terms."""
+    catalog = [
+        Skill(name="Amazon Web Services", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="Microsoft Azure", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="Apache Maven", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="OAuth", nature=SkillNature.TECH, aliases=[]),
+        Skill(name="Amazon S3", nature=SkillNature.TECH, aliases=["awss3"]),
+        Skill(name="AWS Elastic MapReduce (EMR)", nature=SkillNature.TECH, aliases=["EMR"]),
+        Skill(name="HyperText Markup Language (HTML)", nature=SkillNature.TECH, aliases=["HTML"]),
+        Skill(name="SOLID", nature=SkillNature.CONCEPT, aliases=["solid"]),
+    ]
+
+    service = SkillCatalogService(skill_repository=MagicMock(), llm_service=MagicMock())
+    cv_text = "Deployed Java services with Maven, OAuth2, AWS S3, AWS EMR, Azure, HTML, and SOLID principles."
+
+    results = await service.scan_text_for_catalog_skills(cv_text, existing_skills_cache=catalog)
+    found_names = {r["name"] for r in results}
+
+    assert {
+        "Amazon Web Services",
+        "Microsoft Azure",
+        "Apache Maven",
+        "OAuth",
+        "Amazon S3",
+        "AWS Elastic MapReduce (EMR)",
+        "HyperText Markup Language (HTML)",
+        "SOLID",
+    }.issubset(found_names)
