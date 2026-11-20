@@ -2,7 +2,7 @@
 
 from uuid import UUID, uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -111,16 +111,18 @@ class SQLUserProfileRepository(UserProfileRepository):
                 )
             )
 
-            profile_skill_names = [s.name for s in profile.detected_skills]
-            db_profile_skills = {}
+            profile_skill_names = [s.name.lower() for s in profile.detected_skills]
+            db_profile_skills: dict[str, SkillModel] = {}
             if profile_skill_names:
                 db_profile_skills_result = await self._session.execute(
-                    select(SkillModel).where(SkillModel.name.in_(profile_skill_names))
+                    select(SkillModel).where(func.lower(SkillModel.name).in_(profile_skill_names))
                 )
-                db_profile_skills = {
-                    m.name.lower(): m for m in db_profile_skills_result.scalars().all()
-                }
+                for m in db_profile_skills_result.scalars().all():
+                    key = m.name.lower()
+                    if key not in db_profile_skills or m.status == "canonical":
+                        db_profile_skills[key] = m
 
+            seen_profile_skill_ids: set[UUID] = set()
             for skill in profile.detected_skills:
                 norm_name = skill.name.lower()
                 if norm_name not in db_profile_skills:
@@ -136,10 +138,15 @@ class SQLUserProfileRepository(UserProfileRepository):
                     self._session.add(new_skill_model)
                     db_profile_skills[norm_name] = new_skill_model
 
+                resolved_skill = db_profile_skills[norm_name]
+                if resolved_skill.skill_id in seen_profile_skill_ids:
+                    continue
+                seen_profile_skill_ids.add(resolved_skill.skill_id)
+
                 profile_skill_rel = ProfileSkillModel(
                     profile_skill_id=uuid4(),
                     profile_id=profile_model.profile_id,
-                    skill_id=db_profile_skills[norm_name].skill_id,
+                    skill_id=resolved_skill.skill_id,
                     self_taught=skill.self_taught,
                     personal_projects=skill.personal_projects,
                     years_of_experience=skill.years_of_experience,
@@ -379,7 +386,7 @@ class SQLUserProfileRepository(UserProfileRepository):
         )
 
     async def save_single_diagnostic(self, user_id: UUID, affinity: ClusterAffinity) -> None:
-        """Persists a single cluster diagnostic on-demand without touching other diagnostics."""
+        """Persists or refreshes a single cluster diagnostic on-demand without touching others."""
         result = await self._session.execute(
             select(ProfileModel).where(ProfileModel.user_id == user_id)
         )
@@ -387,15 +394,13 @@ class SQLUserProfileRepository(UserProfileRepository):
         if not profile_model or not affinity.cluster_id:
             return
 
-        existing = await self._session.execute(
-            select(DiagnosticModel).where(
+        # Replace any stale diagnostic row for this (profile, cluster) pair
+        await self._session.execute(
+            delete(DiagnosticModel).where(
                 DiagnosticModel.profile_id == profile_model.profile_id,
                 DiagnosticModel.detected_cluster_id == affinity.cluster_id,
             )
         )
-        if existing.scalar_one_or_none():
-            return
-
         await self._persist_affinities_diagnostics(profile_model.profile_id, [affinity])
 
     async def _persist_affinities_diagnostics(
@@ -415,12 +420,17 @@ class SQLUserProfileRepository(UserProfileRepository):
             for g in affinity.skill_gaps:
                 all_skill_names.add(g.skill.name)
 
-        db_all_skills = {}
+        db_all_skills: dict[str, SkillModel] = {}
         if all_skill_names:
             db_skills_result = await self._session.execute(
-                select(SkillModel).where(SkillModel.name.in_(list(all_skill_names)))
+                select(SkillModel).where(
+                    func.lower(SkillModel.name).in_([n.lower() for n in all_skill_names])
+                )
             )
-            db_all_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
+            for m in db_skills_result.scalars().all():
+                key = m.name.lower()
+                if key not in db_all_skills or m.status == "canonical":
+                    db_all_skills[key] = m
 
         for skill_name in all_skill_names:
             norm_name = skill_name.lower()

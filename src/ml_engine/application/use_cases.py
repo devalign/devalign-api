@@ -1639,6 +1639,14 @@ class GetKnowledgeGraphUseCase:
         if not profile:
             return GraphResponseDTO(nodes=[], links=[])
 
+        all_clusters = await self._clusters.get_all_active() if self._clusters else []
+        target_cluster = None
+        if cluster_name:
+            for c in all_clusters:
+                if c.name.lower() == cluster_name.lower():
+                    target_cluster = c
+                    break
+
         target_affinity = None
         if cluster_name:
             if (
@@ -1652,12 +1660,37 @@ class GetKnowledgeGraphUseCase:
                         target_affinity = a
                         break
 
+        if (
+            not target_affinity
+            and cluster_name
+            and target_cluster
+            and target_cluster.centroid_skills
+        ):
+            _, _, computed_affinities, _ = compute_affinities_and_domains(
+                profile.detected_skills, [target_cluster]
+            )
+            if computed_affinities:
+                target_affinity = computed_affinities[0]
+
         if not target_affinity and profile.primary_affinity:
             target_affinity = profile.primary_affinity
 
+        user_skills_by_norm = {s.normalized_name: s for s in profile.detected_skills}
+
         if target_affinity:
-            acquired = {s.normalized_name: s for s in target_affinity.detected_skills}
-            gaps = {g.skill.normalized_name: g.skill for g in target_affinity.skill_gaps}
+            acquired = {
+                s.normalized_name: s
+                for s in target_affinity.detected_skills
+                if s.normalized_name in user_skills_by_norm
+            }
+            gaps: dict[str, Skill] = {}
+            for g in target_affinity.skill_gaps:
+                if g.skill.normalized_name in user_skills_by_norm:
+                    acquired.setdefault(
+                        g.skill.normalized_name, user_skills_by_norm[g.skill.normalized_name]
+                    )
+                else:
+                    gaps[g.skill.normalized_name] = g.skill
             neutral = {
                 s.normalized_name: s
                 for s in profile.detected_skills
@@ -1665,18 +1698,20 @@ class GetKnowledgeGraphUseCase:
             }
         else:
             acquired = {s.normalized_name: s for s in profile.detected_skills}
-            gaps = {g.skill.normalized_name: g.skill for g in profile.skill_gaps}
+            gaps = {
+                g.skill.normalized_name: g.skill
+                for g in profile.skill_gaps
+                if g.skill.normalized_name not in acquired
+            }
             neutral = {}
 
         # Fetch top relevant market skills for cluster context (max 35-40 items)
         market: dict[str, Skill] = {}
-        if self._clusters:
-            all_clusters = await self._clusters.get_all_active()
-            target_cluster = None
+        if all_clusters:
             resolved_cluster_name = cluster_name or (
                 target_affinity.cluster_name if target_affinity else None
             )
-            if resolved_cluster_name:
+            if not target_cluster and resolved_cluster_name:
                 for c in all_clusters:
                     if c.name.lower() == resolved_cluster_name.lower():
                         target_cluster = c
@@ -1868,6 +1903,18 @@ class GetMyProfileUseCase:
                     primary = dc_replace_aff(valid_aff[0], is_primary=True)
                     secondaries = [dc_replace_aff(a, is_primary=False) for a in valid_aff[1:]]
                 else:
+                    refreshed_primary = next(
+                        (
+                            a
+                            for a in all_raw
+                            if (primary.cluster_id and a.cluster_id == primary.cluster_id)
+                            or a.cluster_name.lower() == primary.cluster_name.lower()
+                        ),
+                        None,
+                    )
+                    if refreshed_primary is not None:
+                        primary = dc_replace_aff(refreshed_primary, is_primary=True)
+
                     # Keep primary specialty as primary, and rank all other clusters as secondaries
                     secondaries = [
                         dc_replace_aff(a, is_primary=False)
@@ -1900,6 +1947,12 @@ class GetMyProfileUseCase:
         )
 
         all_affinities_dto = [primary_dto, *secondary_affinities_dto] if primary_dto else []
+
+        effective_skill_gaps = (
+            primary.skill_gaps
+            if primary and primary.cluster_name != "Sin Diagnóstico"
+            else profile.skill_gaps
+        )
 
         return UserProfileDTO(
             user_id=profile.user_id,
@@ -1934,7 +1987,7 @@ class GetMyProfileUseCase:
                     market_demand_percentage=_normalize_demand_percentage(g.skill.frequency),
                     trend=determine_trend(g.skill.name),
                 )
-                for g in profile.skill_gaps
+                for g in effective_skill_gaps
                 if not is_concept_skill(g.skill)
             ],
             full_name=profile.full_name,
