@@ -4,7 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from src.dependencies import SessionDep
@@ -55,13 +55,16 @@ async def update_my_skills(
         raise HTTPException(status_code=404, detail="No profile found. Please upload a CV first.")
 
     # 1. Enriquecer Habilidades con la DB
-    skill_names = [s.name for s in data.skills]
-    db_skills = {}
-    if skill_names:
+    skill_names_lower = [s.name.lower() for s in data.skills]
+    db_skills: dict[str, SkillModel] = {}
+    if skill_names_lower:
         db_skills_result = await session.execute(
-            select(SkillModel).where(SkillModel.name.in_(skill_names))
+            select(SkillModel).where(func.lower(SkillModel.name).in_(skill_names_lower))
         )
-        db_skills = {m.name.lower(): m for m in db_skills_result.scalars().all()}
+        for m in db_skills_result.scalars().all():
+            key = m.name.lower()
+            if key not in db_skills or m.status == "canonical":
+                db_skills[key] = m
 
     detected_skills = []
     for s in data.skills:
@@ -117,7 +120,9 @@ async def update_my_skills(
     # 2. Recalcular Diagnóstico Activo y Top 3 Afinidad
     cluster_repo = SQLClusterRepository(session)
     active_clusters = await cluster_repo.get_all_active()
-    clusters_to_eval = [c for c in active_clusters if c.centroid_skills]
+    clusters_to_eval = [
+        c for c in active_clusters if c.centroid_skills and getattr(c, "tier", "standard") != "low"
+    ]
 
     from src.ml_engine.application.use_cases import compute_affinities_and_domains
 
@@ -157,8 +162,13 @@ async def update_my_skills(
         primary_affinity=primary,
         secondary_affinities=secondaries,
         skill_gaps=primary.skill_gaps,
+        is_diagnosed=True if primary.cluster_name != "Sin Diagnóstico" else profile.is_diagnosed,
     )
-    await repo.save(updated_profile)
+    await repo.save_profile(
+        updated_profile,
+        persist_diagnostics=True,
+        persist_primary_only=True,
+    )
 
     # 4. Devolver perfil actualizado
     from src.ml_engine.application.use_cases import GetMyProfileUseCase
